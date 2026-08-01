@@ -260,23 +260,29 @@ body{font-family:-apple-system,"PingFang SC","Microsoft YaHei","SF Pro Display",
     </div>
   </div>
 
-  <!-- 图表区：数据驱动选择图表类型 -->
+  <!-- 数据来源汇总 -->
   {% set source_dist = source_distribution|default({}) %}
+  {% if source_dist %}
+  <div class="card">
+    <div class="card-title">数据来源汇总 <span class="count">{{ entry_count }}条</span></div>
+    <div style="display:flex;flex-wrap:wrap;gap:12px">
+      {% for src, cnt in source_dist.items() %}
+      <div style="display:flex;align-items:center;gap:6px;font-size:12px">
+        <span class="tag tag-{{ src }}">{% if src == 'xiaohongshu' %}小红书{% elif src == 'douyin' %}抖音{% elif src == 'web_search' %}网页搜索{% elif src == 'social_media' %}社交媒体{% elif src == 'comment_section' %}评论区{% elif src == 'comment_summary' %}分析总结{% else %}{{ src }}{% endif %}</span>
+        <span style="font-weight:700;color:var(--text)">{{ cnt }}</span>
+        <span style="font-size:10px;color:var(--dim)">条 ({{ "%.0f"|format(cnt / entry_count * 100) }}%)</span>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+  {% endif %}
+
+  <!-- 时间趋势 -->
   {% set daily_dist = daily_distribution|default({}) %}
-  {% if source_dist or daily_dist %}
-  <div class="grid {% if source_dist and daily_dist and daily_keys|length > 1 %}grid-2{% else %}grid-1{% endif %}">
-    {% if source_dist %}
-    <div class="card">
-      <div class="card-title">数据来源分布</div>
-      <div class="chart-box" id="sourceChart"></div>
-    </div>
-    {% endif %}
-    {% if daily_dist and daily_keys|length > 1 %}
-    <div class="card">
-      <div class="card-title">时间趋势</div>
-      <div class="chart-box" id="timeChart"></div>
-    </div>
-    {% endif %}
+  {% if daily_dist and daily_keys|length > 1 %}
+  <div class="card">
+    <div class="card-title">时间趋势</div>
+    <div class="chart-box" id="timeChart"></div>
   </div>
   {% endif %}
 
@@ -380,30 +386,6 @@ const TOPIC_ID='{{topic_id}}';
 let cd=1800;
 
 // D3.js 图表渲染
-function renderSourceChart(containerId, data) {
-  const el = document.getElementById(containerId);
-  if (!el || !data || Object.keys(data).length === 0) return;
-  const w = el.clientWidth, h = 260;
-  const srcMap = {xiaohongshu:'小红书',douyin:'抖音',web_search:'网页搜索',social_media:'社交媒体',comment_section:'评论区',comment_summary:'分析总结'};
-  const entries = Object.entries(data).map(([k,v])=>({name:srcMap[k]||k,value:v}));
-  const total = d3.sum(entries, d=>d.value);
-
-  const svg = d3.select('#'+containerId).append('svg').attr('width',w).attr('height',h);
-  const radius = Math.min(w, h) / 2 - 20;
-  const g = svg.append('g').attr('transform',`translate(${w/2},${h/2})`);
-  const color = d3.scaleOrdinal().domain(entries.map(d=>d.name)).range(['#f87171','#60a5fa','#4ade80','#c084fc','#fbbf24','#06b6d4','#a855f7']);
-  const pie = d3.pie().value(d=>d.value).sort(null);
-  const arc = d3.arc().innerRadius(radius*0.4).outerRadius(radius);
-
-  g.selectAll('path').data(pie(entries)).enter().append('path')
-    .attr('d',arc).attr('fill',d=>color(d.data.name)).attr('stroke','#111827').attr('stroke-width',2);
-
-  g.selectAll('text').data(pie(entries)).enter().append('text')
-    .attr('transform',d=>`translate(${arc.centroid(d)})`)
-    .attr('text-anchor','middle').attr('fill','#e2e8f0').attr('font-size','10px')
-    .text(d=>`${d.data.name} ${d.data.value}`);
-}
-
 function renderTimeChart(containerId, data) {
   const el = document.getElementById(containerId);
   if (!el || !data || Object.keys(data).length <= 1) return;
@@ -473,9 +455,6 @@ setInterval(()=>{cd--;if(cd<=0){cd=1800;poll()}document.getElementById('countdow
 
 // 初始化图表
 document.addEventListener('DOMContentLoaded',()=>{
-  {% if source_distribution %}
-  renderSourceChart('sourceChart', {{ source_distribution | tojson }});
-  {% endif %}
   {% if daily_distribution %}
   renderTimeChart('timeChart', {{ daily_distribution | tojson }});
   {% endif %}
