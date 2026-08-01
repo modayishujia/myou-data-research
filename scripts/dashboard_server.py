@@ -170,6 +170,8 @@ body{font-family:-apple-system,"PingFang SC","Microsoft YaHei","SF Pro Display",
   <div class="right">
     <span>更新: <span id="lastUpdate">{{ rendered_at }}</span></span>
     <span>刷新: <span class="countdown" id="countdown">30:00</span></span>
+    <span class="about-btn" onclick="triggerCollect()" title="立即采集">🔄</span>
+    <span class="about-btn" onclick="exportPDF()" title="导出PDF">📄</span>
     <span class="about-btn" onclick="document.getElementById('aboutModal').classList.add('show')">ℹ️</span>
   </div>
 </div>
@@ -438,6 +440,33 @@ function renderTimeChart(containerId, data) {
 }
 
 // 评论弹窗
+// 自动采集触发
+async function triggerCollect() {
+  try {
+    const r = await fetch('/api/collect/' + TOPIC_ID);
+    const d = await r.json();
+    if (d.status === 'success') {
+      alert('采集完成：新增 ' + d.new_entries + ' 条数据');
+      location.reload();
+    } else {
+      alert('采集失败：' + d.message);
+    }
+  } catch(e) { alert('采集失败：' + e.message); }
+}
+
+// PDF导出
+async function exportPDF() {
+  try {
+    const r = await fetch('/api/export/' + TOPIC_ID);
+    const d = await r.json();
+    if (d.status === 'success') {
+      alert('PDF已生成：' + d.path);
+    } else {
+      alert('导出失败：' + d.message);
+    }
+  } catch(e) { alert('导出失败：' + e.message); }
+}
+
 function openCommentModal(idx, platform, sent) {
   const dataEl = document.querySelector(`#comment-summary-${idx}`).closest('.comment-card').querySelector('.comment-full-data');
   const content = dataEl ? dataEl.dataset.content : '无数据';
@@ -579,6 +608,41 @@ def api_topic(topic_id):
 
 @app.route("/api/topics")
 def api_topics(): return jsonify(list_topics())
+
+
+@app.route("/api/export/<topic_id>")
+def export_pdf(topic_id):
+    """Generate and return PDF report."""
+    try:
+        from report_generator import generate_pdf
+        path = generate_pdf(topic_id)
+        return jsonify({"status": "success", "path": path})
+    except ImportError:
+        return jsonify({"status": "error", "message": "reportlab not installed. Run: pip install reportlab"}), 500
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
+@app.route("/api/collect/<topic_id>")
+def trigger_collect(topic_id):
+    """Trigger data collection for a topic."""
+    try:
+        from auto_collect import run_collection
+        result = run_collection(topic_id)
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
+@app.route("/api/collect")
+def trigger_collect_all():
+    """Trigger data collection for all active topics."""
+    try:
+        from auto_collect import run_all_topics
+        results = run_all_topics()
+        return jsonify({"status": "success", "count": len(results), "results": results})
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
 
 
 def main():
