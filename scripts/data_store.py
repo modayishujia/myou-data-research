@@ -360,7 +360,7 @@ def get_delta(topic_id: str) -> dict:
         "prev_positive_rate": round(prev_positive_rate, 3),
         "curr_positive_rate": round(curr_positive_rate, 3),
         "new_keywords": new_keywords,
-        "消失_keywords": 消失_keywords,
+        "disappeared_keywords": disappeared_keywords,
         "trend": trend,
     }
 
