@@ -8,7 +8,8 @@ from flask import Flask, render_template_string, jsonify, send_from_directory
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from data_store import (
     DATA_DIR, list_topics, get_topic_summary, load_topic_meta,
-    get_all_entries, get_evolution, get_signals, get_entries_since
+    get_all_entries, get_evolution, get_signals, get_entries_since,
+    snapshot_topic, get_delta, detect_anomalies, get_all_topics_overview
 )
 
 ASSETS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'assets')
@@ -229,6 +230,18 @@ body{font-family:-apple-system,"PingFang SC","Microsoft YaHei","SF Pro Display",
     </div>
   </div>
 
+  <!-- 异常告警 -->
+  {% if anomalies %}
+  <div class="card" style="border-left:3px solid var(--red);background:rgba(239,68,68,.03)">
+    <div class="card-title" style="color:var(--red)">⚠️ 异常检测 <span class="count">{{ anomalies|length }}个异常</span></div>
+    {% for a in anomalies %}
+    <div style="padding:6px 0;font-size:12px;border-bottom:1px solid var(--border)">
+      <strong>[{{ a.severity }}]</strong> {{ a.description }}
+    </div>
+    {% endfor %}
+  </div>
+  {% endif %}
+
   <!-- 态势 + 风险 -->
   <div class="grid grid-2">
     <div class="card">
@@ -243,6 +256,21 @@ body{font-family:-apple-system,"PingFang SC","Microsoft YaHei","SF Pro Display",
       {% if evolution[-1].new_keywords %}<div class="analysis-item"><strong>新关键词：</strong>{% for kw in evolution[-1].new_keywords[:5] %}<span class="evo-kw">{{ kw }}</span>{% endfor %}</div>{% endif %}
       {% if evolution[-1].key_changes %}<div class="analysis-item"><strong>关键变化：</strong>{{ evolution[-1].key_changes[:4]|join('；') }}</div>{% endif %}
       {% if evolution[-1].notable_events %}<div class="analysis-item"><strong>标志性事件：</strong>{{ evolution[-1].notable_events[:3]|join('；') }}</div>{% endif %}
+      {% endif %}
+      <!-- Delta 对比 -->
+      {% if delta and delta.has_previous %}
+      <div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--border)">
+        <div style="font-size:10px;color:var(--dim);margin-bottom:6px">与上次采集对比</div>
+        <div style="display:flex;gap:16px;font-size:11px">
+          <span>数据 <strong style="color:{% if delta.entry_delta > 0 %}var(--green){% elif delta.entry_delta < 0 %}var(--red){% else %}var(--dim){% endif %}">{% if delta.entry_delta > 0 %}+{% endif %}{{ delta.entry_delta }}</strong></span>
+          <span>信号 <strong style="color:{% if delta.signal_delta > 0 %}var(--red){% elif delta.signal_delta < 0 %}var(--green){% else %}var(--dim){% endif %}">{% if delta.signal_delta > 0 %}+{% endif %}{{ delta.signal_delta }}</strong></span>
+          <span>情感 <strong style="color:{% if delta.sentiment_shift > 0.05 %}var(--green){% elif delta.sentiment_shift < -0.05 %}var(--red){% else %}var(--dim){% endif %}">{% if delta.sentiment_shift > 0 %}+{% endif %}{{ "%.0f"|format(delta.sentiment_shift * 100) }}%</strong></span>
+          <span>趋势 <strong>{% if delta.trend == 'rapidly_improving' %}🚀 急转正面{% elif delta.trend == 'rapidly_declining' %}🔻 急转负面{% elif delta.trend == 'improving' %}📈 改善{% elif delta.trend == 'declining' %}📉 恶化{% elif delta.trend == 'growing' %}📊 增长{% else %}➡️ 稳定{% endif %}</strong></span>
+        </div>
+        {% if delta.new_keywords %}
+        <div style="margin-top:6px;font-size:10px;color:var(--cyan)">新涌现：{{ delta.new_keywords[:5]|join('、') }}</div>
+        {% endif %}
+      </div>
       {% endif %}
     </div>
     <div class="card">
@@ -482,11 +510,39 @@ def serve_assets(filename):
 
 @app.route("/")
 def index():
-    topics = list_topics()
-    if not topics: return "<h1>暂无数据</h1>"
-    if len(topics)==1: return show_topic(topics[0]["topic_id"])
-    links="".join(f'<div style="margin:10px 0"><a href="/topic/{t["topic_id"]}" style="color:#3b82f6;font-size:16px">{t["topic"]}</a><span style="color:#64748b;font-size:12px;margin-left:10px">{t.get("collection_count",0)}条</span></div>' for t in topics)
-    return f'<!DOCTYPE html><html><head><meta charset="utf-8"><title>数据调研看板</title><style>body{{background:#0b0f1a;color:#e2e8f0;font-family:sans-serif;max-width:600px;margin:60px auto;padding:20px}}a{{text-decoration:none}}</style></head><body><h1>数据调研看板</h1>{links}</body></html>'
+    overview = get_all_topics_overview()
+    if not overview:
+        return '<!DOCTYPE html><html><head><meta charset="utf-8"><title>数据调研看板</title><style>body{background:#0b0f1a;color:#e2e8f0;font-family:sans-serif;display:flex;justify-content:center;align-items:center;height:100vh}h1{font-size:18px;color:#64748b}</style></head><body><h1>暂无调研数据</h1></body></html>'
+    if len(overview)==1:
+        return show_topic(overview[0]["topic_id"])
+
+    cards = ""
+    for t in overview:
+        h = t.get("health", "unknown")
+        color = {"green":"#22c55e","yellow":"#f59e0b","red":"#ef4444"}.get(h, "#64748b")
+        cards += f'''<a href="/topic/{t['topic_id']}" style="display:block;background:#111827;border:1px solid #1e293b;border-left:4px solid {color};border-radius:6px;padding:14px 18px;margin-bottom:8px;text-decoration:none;color:#e2e8f0">
+          <div style="display:flex;justify-content:space-between;align-items:center">
+            <div>
+              <div style="font-size:14px;font-weight:700">{t['topic']}</div>
+              <div style="font-size:11px;color:#64748b;margin-top:4px">{t.get('entry_count',0)}条数据 · {t.get('signal_count',0)}个信号 · 更新 {t.get('updated_at','')[:16]}</div>
+            </div>
+            <div style="text-align:right">
+              <div style="font-size:20px;font-weight:900;color:{color}">{'●' if h=='green' else '●' if h=='yellow' else '●'}</div>
+              <div style="font-size:10px;color:#64748b">正面{int(t.get('positive_rate',0)*100)}% · 负面{int(t.get('negative_rate',0)*100)}%</div>
+            </div>
+          </div>
+        </a>'''
+
+    return f'''<!DOCTYPE html><html><head><meta charset="utf-8"><title>数据调研看板</title>
+    <style>body{{background:#0b0f1a;color:#e2e8f0;font-family:-apple-system,"PingFang SC",sans-serif;max-width:700px;margin:0 auto;padding:40px 20px}}a{{text-decoration:none}}</style></head>
+    <body>
+      <div style="margin-bottom:24px">
+        <div style="font-size:11px;color:#22c55e;font-weight:700;letter-spacing:1px">LIVE</div>
+        <h1 style="font-size:20px;margin:8px 0">数据调研看板</h1>
+        <p style="font-size:12px;color:#64748b">{len(overview)} 个调研话题</p>
+      </div>
+      {cards}
+    </body></html>'''
 
 
 @app.route("/topic/<topic_id>")
@@ -497,6 +553,12 @@ def show_topic(topic_id):
     dk=sorted(summary["daily_distribution"].keys()) if summary["daily_distribution"] else []
     dv=[summary["daily_distribution"][k] for k in dk]
     scenario=detect_scenario(meta["topic"], meta.get("keywords",[]))
+
+    # Snapshot + delta + anomalies
+    snapshot_topic(topic_id)
+    delta = get_delta(topic_id)
+    anomalies = detect_anomalies(topic_id)
+
     return render_template_string(DASHBOARD_HTML,
         topic_id=topic_id,topic=meta["topic"],scenario=scenario,
         created_at=meta.get("created_at","")[:16],updated_at=meta.get("updated_at","")[:16],
@@ -506,6 +568,7 @@ def show_topic(topic_id):
         source_distribution=summary["source_distribution"],daily_distribution=summary["daily_distribution"],
         daily_keys=dk,daily_values=dv,
         signals=summary["signals"],evolution=summary["evolution"],entries=summary["entries"],
+        delta=delta,anomalies=anomalies,
         data_dir=DATA_DIR,rendered_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
 
 
