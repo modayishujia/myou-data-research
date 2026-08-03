@@ -10,34 +10,41 @@
 
 ## 安装
 
-### 方式一：Git Clone
+### 方式一：自然语言安装（推荐）
+
+不需要手动敲命令，直接对你正在使用的 AI Agent（Codex / MiMoCode / Claude Code / Cursor / Kimi Code 等）说：
+
+> **"帮我安装数据调研 skill，克隆 https://github.com/modayishujia/myou-data-research 到我的 skill 目录"**
+
+Agent 会自动完成以下步骤：
+
+```bash
+# Agent 会执行的逻辑（无需手动操作）：
+git clone https://github.com/modayishujia/myou-data-research.git <你的skill目录>/data-research
+pip install flask        # 看板依赖
+```
+
+也可以直接说：
+- "装一下数据调研 skill"
+- "把我的数据调研工具装到 Codex / MiMoCode / Claude 里"
+- "clone myou-data-research 这个仓库当 skill 用"
+
+### 方式二：手动安装
 
 ```bash
 git clone https://github.com/modayishujia/myou-data-research.git
 cp -r myou-data-research <你的skill目录>/data-research
-```
-
-### 方式二：按平台安装
-
-```bash
-# Codex
-git clone https://github.com/modayishujia/myou-data-research.git ~/.codex/skills/data-research
-
-# MiMoCode
-git clone https://github.com/modayishujia/myou-data-research.git ~/.local/share/mimocode/skills/data-research
-
-# Claude Code
-git clone https://github.com/modayishujia/myou-data-research.git ~/.claude/skills/data-research
-
-# OpenCode / Kimi Code / 其他
-git clone https://github.com/modayishujia/myou-data-research.git <你的skill目录>/data-research
-```
-
-### 依赖
-
-```bash
 pip install flask
 ```
+
+各平台 skill 目录参考：
+
+| 平台 | skill 目录 |
+|------|-----------|
+| Codex | `~/.codex/skills/data-research` |
+| MiMoCode | `~/.local/share/mimocode/skills/data-research` |
+| Claude Code | `~/.claude/skills/data-research` |
+| OpenCode / Kimi Code / 其他 | `<你的skill目录>/data-research` |
 
 ## 使用
 
@@ -50,6 +57,7 @@ pip install flask
 - "追踪XX事件变化"
 - "XX话题发酵过程"
 - "帮我收集XX的信息"
+- "生成XX的深度报告"（触发 14 章节完整版报告）
 
 ### 场景自动匹配
 
@@ -90,6 +98,12 @@ pip install flask
 - 30分钟自动轮询刷新
 - ESC / × 关闭弹窗
 
+### 深度报告（可汇报）
+- **14 章节数据驱动报告**：核心结论 / 情绪全景 / 正负面深度分析 / 来源追溯 / 操纵判断 / KOL 画像 / 竞品对比 / 风险矩阵 / 预测研判 / 行动建议 / 演变时间线 / 评论区洞察 / 数据明细
+- 内容随数据动态定制：有数据的章节渲染、无数据自动隐藏
+- 看板顶栏「📊 报告」入口，每次采集后自动更新
+- 支持 PDF 导出
+
 ### 多话题总览
 首页显示所有调研话题的健康状态（绿/黄/红灯），点击进入单话题详情。
 
@@ -103,10 +117,14 @@ data-research/
 │   └── openai.yaml             # UI 元数据
 ├── scripts/
 │   ├── dashboard_server.py     # Flask 看板服务
-│   └── data_store.py           # JSON 数据存储引擎
+│   ├── data_store.py           # JSON 数据存储引擎
+│   ├── report_generator.py     # 深度报告生成器（HTML 14章节 + PDF）
+│   └── auto_collect.py         # 自动采集流水线
 ├── assets/
 │   ├── d3.min.js               # D3.js 可视化库
-│   └── qrcode.png              # 公众号二维码
+│   ├── qrcode.png              # 公众号二维码（原图）
+│   ├── qr_small.png            # 二维码压缩版
+│   └── qr_base64.txt           # 二维码 base64 缓存（报告内嵌用）
 └── references/
     └── data_sources.md         # 数据源参考
 ```
@@ -133,8 +151,12 @@ data-research/
 |------|------|
 | `GET /` | 多话题总览 |
 | `GET /topic/{id}` | 单话题详情看板 |
+| `GET /topic/{id}/report` | 深度报告（缺失时自动生成） |
 | `GET /api/topic/{id}` | JSON API |
 | `GET /api/topics` | 所有话题列表 |
+| `GET/POST /api/report/{id}` | 重新生成深度报告 |
+| `GET /api/export/{id}` | 导出 PDF 报告 |
+| `GET /api/collect/{id}` | 触发采集（采集后自动更新报告） |
 | `GET /assets/{file}` | 静态资源 |
 
 ## License
