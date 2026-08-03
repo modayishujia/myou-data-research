@@ -172,6 +172,7 @@ body{font-family:-apple-system,"PingFang SC","Microsoft YaHei","SF Pro Display",
     <span>刷新: <span class="countdown" id="countdown">30:00</span></span>
     <span class="about-btn" onclick="triggerCollect()" title="立即采集">🔄</span>
     <span class="about-btn" onclick="exportPDF()" title="导出PDF">📄</span>
+    <a href="/topic/{{ topic_id }}/report" class="about-btn report-link" title="深度报告" style="text-decoration:none;font-size:14px;font-weight:700;color:var(--accent)">📊 报告</a>
     <span class="about-btn" onclick="document.getElementById('aboutModal').classList.add('show')">ℹ️</span>
   </div>
 </div>
@@ -554,6 +555,7 @@ def index():
             <div>
               <div style="font-size:14px;font-weight:700">{t['topic']}</div>
               <div style="font-size:11px;color:#64748b;margin-top:4px">{t.get('entry_count',0)}条数据 · {t.get('signal_count',0)}个信号 · 更新 {t.get('updated_at','')[:16]}</div>
+              <div style="font-size:11px;color:#3b82f6;margin-top:6px">📊 <span style="text-decoration:underline">查看深度报告</span></div>
             </div>
             <div style="text-align:right">
               <div style="font-size:20px;font-weight:900;color:{color}">{'●' if h=='green' else '●' if h=='yellow' else '●'}</div>
@@ -621,6 +623,39 @@ def export_pdf(topic_id):
         return jsonify({"status": "error", "message": "reportlab not installed. Run: pip install reportlab"}), 500
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
+
+
+@app.route("/topic/<topic_id>/report")
+def show_report(topic_id):
+    """Serve the generated HTML report for a topic. Regenerates if missing."""
+    try:
+        from report_generator import generate_html_report
+        topic_dir = os.path.join(DATA_DIR, topic_id)
+        report_path = os.path.join(topic_dir, "report.html")
+        if not os.path.exists(report_path):
+            generate_html_report(topic_id, report_path)
+        with open(report_path, "r", encoding="utf-8") as f:
+            return f.read()
+    except FileNotFoundError:
+        return "<h1>未找到该话题</h1>", 404
+    except Exception as e:
+        return f"<h1>报告生成失败</h1><p>{e}</p>", 500
+
+
+@app.route("/api/report/<topic_id>", methods=["GET", "POST"])
+def api_generate_report(topic_id):
+    """Regenerate the HTML report for a topic."""
+    try:
+        from report_generator import generate_html_report
+        topic_dir = os.path.join(DATA_DIR, topic_id)
+        report_path = os.path.join(topic_dir, "report.html")
+        path = generate_html_report(topic_id, report_path)
+        return jsonify({"status": "success", "path": path,
+                        "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S")})
+    except FileNotFoundError:
+        return jsonify({"error": "topic not found"}), 404
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 @app.route("/api/collect/<topic_id>")

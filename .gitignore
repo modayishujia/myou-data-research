@@ -7,3 +7,6 @@ dist/
 build/
 .env
 *.log
+
+# 话题级调研产物（按话题自动生成，不入库）
+reports/

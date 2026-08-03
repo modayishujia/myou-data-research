@@ -134,6 +134,14 @@ def run_collection(topic_id: str) -> dict:
     # Get delta
     delta = get_delta(topic_id)
 
+    # Regenerate HTML report after collection
+    report_path = None
+    try:
+        from report_generator import generate_html_report
+        report_path = generate_html_report(topic_id)
+    except Exception as e:
+        log_collection(topic_id, "report_error", {"error": str(e)})
+
     elapsed = time.time() - start_time
 
     result = {
@@ -143,6 +151,7 @@ def run_collection(topic_id: str) -> dict:
         "total_entries": len(get_all_entries(topic_id)),
         "anomalies": len(anomalies),
         "delta": delta,
+        "report": report_path,
         "elapsed_seconds": round(elapsed, 2),
         "timestamp": datetime.now(timezone.utc).isoformat()
     }
