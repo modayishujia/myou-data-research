@@ -646,3 +646,7 @@ git push origin main
 - 空章节自动隐藏，不显示空白区域
 - 报告是文字为主体，图表只做辅助
 - 页脚二维码固定「莫说闲话」公众号，生成报告时勿写其他名称
+
+### 更新已安装的 skill
+
+使用者更新到最新版本：对 AI Agent 说「帮我更新 myou-data-research 数据调研工具」，或手动在安装目录执行 `bash update.sh`（从 GitHub 拉取最新并覆盖，保留本地 reports/ 产物）。开发者源码仓库用 `git pull` 更新，勿运行 update.sh。

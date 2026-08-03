@@ -16,6 +16,20 @@
 
 Agent 会自动完成安装（克隆仓库到你的 skill 目录 + 按 `requirements.txt` 安装依赖），无需手动敲命令。
 
+## 更新
+
+已安装的使用者更新到最新版本，对你正在使用的 AI Agent 说：
+
+> **帮我更新 myou-data-research 数据调研工具**
+
+Agent 会自动执行 `update.sh`（从 GitHub 拉取最新版本并覆盖安装，保留本地 `reports/` 调研产物）。也可以手动在 skill 安装目录下执行：
+
+```bash
+bash update.sh
+```
+
+> 开发者提示：源码仓库 `myou-data-research/` 本身就是 git 仓库，请用 `git pull` 更新，不要运行 `update.sh`（它面向无 `.git` 的安装副本）。
+
 ## 使用
 
 ### 触发方式
