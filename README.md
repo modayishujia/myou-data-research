@@ -80,7 +80,7 @@ Agent 会自动完成安装（克隆仓库到你的 skill 目录 + 按 `requirem
 ## 目录结构
 
 ```
-data-research/
+myou-data-research/
 ├── SKILL.md                    # 主指令文件
 ├── README.md                   # 本文件
 ├── requirements.txt            # Python 依赖（flask / reportlab）

@@ -1,7 +1,7 @@
 interface:
   display_name: "数据调研"
   short_description: "全天候数据采集与舆情演变追踪"
-  default_prompt: "Use $data-research to 调研「XXX话题」的舆情变化，关注情感演变和关键转折点"
+  default_prompt: "Use $myou-data-research to 调研「XXX话题」的舆情变化，关注情感演变和关键转折点"
   brand_color: "#1a1a2e"
 
 policy:
