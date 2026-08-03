@@ -1,5 +1,5 @@
 ---
-name: data-research
+name: myou-data-research
 description: >
   全天候数据调研 skill。基于8维度调研框架（搜索热度/内容生态/评论区情绪/KOL画像/竞品对比/话题发酵/风险评估/预测研判），
   持续采集网络数据、社交媒体、评论区信息，增量更新本地 JSON 存储，追踪话题在时间维度的发酵与演变过程。
