@@ -1,0 +1,5 @@
+# 数据调研 skill 依赖
+# 安装：pip install -r requirements.txt
+
+flask>=3.0        # 监控看板服务（必需）
+reportlab>=4.0    # PDF 报告导出（可选，不安装则仅 HTML 报告可用）

@@ -14,7 +14,7 @@
 
 > **帮我从：https://github.com/modayishujia/myou-data-research 安装数据调研工具**
 
-Agent 会自动完成安装（克隆仓库到你的 skill 目录 + 安装看板依赖），无需手动敲命令。
+Agent 会自动完成安装（克隆仓库到你的 skill 目录 + 按 `requirements.txt` 安装依赖），无需手动敲命令。
 
 ## 使用
 
@@ -83,6 +83,7 @@ Agent 会自动完成安装（克隆仓库到你的 skill 目录 + 安装看板�
 data-research/
 ├── SKILL.md                    # 主指令文件
 ├── README.md                   # 本文件
+├── requirements.txt            # Python 依赖（flask / reportlab）
 ├── agents/
 │   └── openai.yaml             # UI 元数据
 ├── scripts/
