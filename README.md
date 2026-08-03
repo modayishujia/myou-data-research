@@ -10,41 +10,11 @@
 
 ## 安装
 
-### 方式一：自然语言安装（推荐）
+对你正在使用的 AI Agent（Codex / MiMoCode / Claude Code / Cursor / Kimi Code 等）说：
 
-不需要手动敲命令，直接对你正在使用的 AI Agent（Codex / MiMoCode / Claude Code / Cursor / Kimi Code 等）说：
+> **帮我从：https://github.com/modayishujia/myou-data-research 安装数据调研工具**
 
-> **"帮我安装数据调研 skill，克隆 https://github.com/modayishujia/myou-data-research 到我的 skill 目录"**
-
-Agent 会自动完成以下步骤：
-
-```bash
-# Agent 会执行的逻辑（无需手动操作）：
-git clone https://github.com/modayishujia/myou-data-research.git <你的skill目录>/data-research
-pip install flask        # 看板依赖
-```
-
-也可以直接说：
-- "装一下数据调研 skill"
-- "把我的数据调研工具装到 Codex / MiMoCode / Claude 里"
-- "clone myou-data-research 这个仓库当 skill 用"
-
-### 方式二：手动安装
-
-```bash
-git clone https://github.com/modayishujia/myou-data-research.git
-cp -r myou-data-research <你的skill目录>/data-research
-pip install flask
-```
-
-各平台 skill 目录参考：
-
-| 平台 | skill 目录 |
-|------|-----------|
-| Codex | `~/.codex/skills/data-research` |
-| MiMoCode | `~/.local/share/mimocode/skills/data-research` |
-| Claude Code | `~/.claude/skills/data-research` |
-| OpenCode / Kimi Code / 其他 | `<你的skill目录>/data-research` |
+Agent 会自动完成安装（克隆仓库到你的 skill 目录 + 安装看板依赖），无需手动敲命令。
 
 ## 使用
 
