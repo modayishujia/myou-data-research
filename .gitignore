@@ -10,3 +10,6 @@ build/
 
 # 话题级调研产物（按话题自动生成，不入库）
 reports/
+
+# 本地设计迭代笔记（不入库）
+DESIGN_NOTES.md

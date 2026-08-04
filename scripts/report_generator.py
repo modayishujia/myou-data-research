@@ -15,7 +15,7 @@ from collections import Counter
 from datetime import datetime
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from data_store import get_topic_summary, list_topics, get_topic_dir
+from data_store import get_topic_summary, list_topics, get_topic_dir, get_methodology
 
 try:
     from reportlab.lib.pagesizes import A4
@@ -179,7 +179,7 @@ TYPE_LABELS = {"sentiment_shift": "情感转向", "keyword_emergence": "关键�
                "volume_spike": "量级异常", "narrative_change": "叙事变化",
                "risk_trigger": "风险触发"}
 TYPE_WEIGHTS = {"critical": 5, "high": 4, "medium": 3, "low": 2}
-SENT_COLORS = {"positive": "#3ddc97", "negative": "#ff5d6c", "neutral": "#4f8cff", "mixed": "#b48cff"}
+SENT_COLORS = {"positive": "#34d399", "negative": "#fb7185", "neutral": "#5b8cff", "mixed": "#a78bfa"}
 SENT_CLS = {"positive": "sent-pos", "negative": "sent-neg", "neutral": "sent-mid", "mixed": "sent-mix"}
 PHASE_SEQ = {"emergence": 0, "growth": 1, "peak": 2, "decline": 3, "stable": 4}
 
@@ -343,6 +343,8 @@ def analyze_topic(topic_id):
         "scenario": detect_scenario(meta["topic"], meta.get("keywords", [])),
         "top_keywords": top_keywords(entries),
         "comment_summaries": [e for e in entries if e.get("source") in ("comment_section", "comment_summary") or "评论区总结" in e.get("content", "")],
+        "methodology": get_methodology(topic_id),  # 每个话题独立生成的调研方法论
+        "charts": {},  # 各章节收集的 ECharts 配置 {id: option}
     }
 
 
@@ -350,92 +352,241 @@ def analyze_topic(topic_id):
 # HTML 渲染
 # ============================================================
 
-def _html_head(a):
-    return f"""<!DOCTYPE html>
-<html lang="zh-CN">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>{esc(a['meta']['topic'])} - 深度调研报告</title>
-<style>
-*{{margin:0;padding:0;box-sizing:border-box}}
-:root{{--bg:#0b0f1a;--panel:#141a2e;--panel2:#1a2238;--border:#2a3554;--text:#e8ecf5;--text2:#9aa7c7;--accent:#4f8cff;--pos:#3ddc97;--neg:#ff5d6c;--mid:#f5b942;--mix:#b48cff}}
-body{{background:var(--bg);color:var(--text);font-family:-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;line-height:1.75;font-size:15px}}
-.container{{max-width:1100px;margin:0 auto;padding:0 24px 60px}}
-.header{{background:linear-gradient(135deg,#101830,#0b1226);border-bottom:1px solid var(--border);padding:44px 0 30px;margin-bottom:36px}}
-.header .inner{{max-width:1100px;margin:0 auto;padding:0 24px}}
-.header h1{{font-size:30px;font-weight:700;margin-bottom:10px}}
-.header .sub{{color:var(--text2);font-size:14px;margin-bottom:18px}}
-.meta-grid{{display:flex;flex-wrap:wrap;gap:10px}}
-.meta-chip{{background:var(--panel2);border:1px solid var(--border);border-radius:8px;padding:7px 14px;font-size:12.5px;color:var(--text2)}}
-.meta-chip b{{color:var(--text)}}
-h2.sec{{font-size:22px;font-weight:700;margin:44px 0 20px;padding-bottom:12px;border-bottom:2px solid var(--border)}}
-h2.sec .num{{display:inline-block;background:var(--accent);color:#fff;border-radius:6px;padding:2px 10px;font-size:13px;margin-right:10px;vertical-align:3px}}
-h3{{font-size:16px;color:var(--accent);margin:22px 0 10px}}
-p{{margin-bottom:12px}}
-.card{{background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:20px 22px;margin-bottom:16px}}
-.card-title{{font-size:15px;font-weight:700;margin-bottom:10px;display:flex;align-items:center;gap:8px}}
-.tag{{font-size:11px;padding:2px 8px;border-radius:4px;font-weight:600}}
-.tag-info{{background:rgba(79,140,255,.15);color:var(--accent)}}
-.tag-pos{{background:rgba(61,220,151,.15);color:var(--pos)}}
-.tag-neg{{background:rgba(255,93,108,.15);color:var(--neg)}}
-.tag-mid{{background:rgba(245,185,66,.15);color:var(--mid)}}
-.verdict{{background:linear-gradient(135deg,rgba(79,140,255,.08),rgba(61,220,151,.06));border:1px solid var(--accent);border-left:4px solid var(--accent);border-radius:10px;padding:16px 20px;margin:14px 0}}
-.verdict.red{{border-color:var(--neg);border-left-color:var(--neg);background:linear-gradient(135deg,rgba(255,93,108,.08),rgba(255,93,108,.03))}}
-table{{width:100%;border-collapse:collapse;margin:12px 0 18px;font-size:13px}}
-th{{background:var(--panel2);color:var(--text);text-align:left;padding:9px 12px;border:1px solid var(--border);font-weight:600}}
-td{{padding:9px 12px;border:1px solid var(--border);color:var(--text2);vertical-align:top}}
-td b{{color:var(--text)}}
-.kpi-grid{{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin:14px 0}}
-.kpi{{background:var(--panel2);border:1px solid var(--border);border-radius:10px;padding:14px;text-align:center}}
-.kpi .val{{font-size:22px;font-weight:700;color:var(--accent)}}
-.kpi .val.warn{{color:var(--neg)}}
-.kpi .val.ok{{color:var(--pos)}}
-.kpi .lbl{{font-size:12px;color:var(--text2);margin-top:4px}}
-.bar-row{{display:flex;align-items:center;margin-bottom:7px;font-size:13px}}
-.bar-label{{width:110px;color:var(--text2);flex-shrink:0}}
-.bar-track{{flex:1;background:var(--panel2);border-radius:4px;height:20px;overflow:hidden}}
-.bar-fill{{height:100%;border-radius:4px;display:flex;align-items:center;padding-left:8px;font-size:12px;color:#fff;font-weight:600;min-width:30px}}
-.bar-val{{width:70px;text-align:right;color:var(--text2);font-size:12px;flex-shrink:0}}
-.timeline{{position:relative;padding-left:26px;margin:14px 0}}
-.timeline::before{{content:"";position:absolute;left:8px;top:4px;bottom:4px;width:2px;background:var(--border)}}
-.tl-item{{position:relative;margin-bottom:18px}}
-.tl-item::before{{content:"";position:absolute;left:-23px;top:6px;width:10px;height:10px;border-radius:50%;background:var(--accent);border:2px solid var(--bg)}}
-.tl-item.evo-growth::before,.tl-item.evo-peak::before{{background:var(--pos)}}
-.tl-item.evo-decline::before{{background:var(--neg)}}
-.tl-date{{font-size:12px;color:var(--accent);font-weight:600}}
-.tl-title{{font-weight:700;margin-bottom:3px}}
-.tl-body{{color:var(--text2);font-size:13px}}
-.evo-phase{{display:inline-block;padding:1px 8px;border-radius:3px;font-size:10px;font-weight:700;margin-right:8px;background:var(--panel2);color:var(--accent)}}
-.signal{{padding:10px 14px;border-left:3px solid;border-bottom:1px solid var(--border);font-size:12px}}
-.signal-red{{border-left-color:var(--neg);background:rgba(255,93,108,.04)}}
-.signal-orange{{border-left-color:#f5a623;background:rgba(245,166,35,.03)}}
-.signal-yellow{{border-left-color:var(--mid);background:rgba(245,185,66,.02)}}
-.signal-green{{border-left-color:var(--pos);background:rgba(61,220,151,.02)}}
-.signal-badge{{font-size:9px;font-weight:800;padding:2px 8px;border-radius:3px;background:var(--panel2);color:var(--text)}}
-.signal-type{{font-size:10px;color:var(--text2);margin-left:8px}}
-.signal-desc{{color:var(--text);line-height:1.6;margin-top:4px}}
-.signal-action{{margin-top:4px;font-size:10.5px;color:var(--accent)}}
-.signal-evi{{padding-left:16px;font-size:11px;color:var(--text2);margin-top:4px}}
-.comment-text{{font-size:12px;line-height:1.8;color:var(--text2)}}
-.sent{{display:inline-block;padding:1px 8px;border-radius:4px;font-size:11px;font-weight:600}}
-.sent-pos{{background:rgba(61,220,151,.15);color:var(--pos)}}
-.sent-neg{{background:rgba(255,93,108,.15);color:var(--neg)}}
-.sent-mid{{background:rgba(245,185,66,.15);color:var(--mid)}}
-.sent-mix{{background:rgba(180,140,255,.15);color:var(--mix)}}
-blockquote{{border-left:3px solid var(--accent);background:var(--panel2);padding:12px 16px;margin:12px 0;border-radius:0 8px 8px 0;color:var(--text2)}}
-ul,ol{{padding-left:22px;margin-bottom:12px}}
-li{{margin:5px 0;color:var(--text2)}}
-li b{{color:var(--text)}}
-.note{{font-size:12.5px;color:var(--text2);background:var(--panel2);border-radius:8px;padding:10px 14px;margin:12px 0}}
-.footer{{margin-top:50px;padding-top:20px;border-top:1px solid var(--border);color:var(--text2);font-size:12.5px;text-align:center}}
-@media print{{.card,.verdict,table{{break-inside:avoid}}}}
-</style>
-</head>
-<body>
-<div class="header">
+REPORT_CSS = """*{margin:0;padding:0;box-sizing:border-box}
+:root{--bg:#0a0e17;--panel:#101828;--panel2:#141d33;--border:#1d2943;--text:#e6ecf7;--text2:#8b9bc0;--accent:#5b8cff;--pos:#34d399;--neg:#fb7185;--mid:#fbbf24;--mix:#a78bfa;--mono:'SF Mono','JetBrains Mono',ui-monospace,Menlo,Consolas,monospace}
+body{background:var(--bg);color:var(--text);font-family:'SF Pro Display','PingFang SC','Hiragino Sans GB','Microsoft YaHei',system-ui,sans-serif;line-height:1.75;font-size:15px}
+.container{max-width:1100px;margin:0 auto;padding:0 24px 60px}
+.header{background:linear-gradient(135deg,#111a30,#0a1120);border-bottom:1px solid var(--border);padding:44px 0 30px;margin-bottom:36px}
+.header .inner{max-width:1100px;margin:0 auto;padding:0 24px}
+.header .eyebrow{font-family:var(--mono);font-size:10px;color:var(--accent);letter-spacing:2px;margin-bottom:10px}
+.header h1{font-size:30px;font-weight:800;margin-bottom:10px;letter-spacing:.5px}
+.header .sub{color:var(--text2);font-size:14px;margin-bottom:18px}
+.meta-grid{display:flex;flex-wrap:wrap;gap:10px}
+.meta-chip{background:var(--panel2);border:1px solid var(--border);border-radius:6px;padding:7px 14px;font-size:12.5px;color:var(--text2)}
+.meta-chip b{color:var(--text);font-family:var(--mono);font-variant-numeric:tabular-nums;font-weight:600}
+h2.sec{font-size:22px;font-weight:800;margin:44px 0 20px;padding-bottom:12px;border-bottom:1px solid var(--border)}
+h2.sec .num{display:inline-block;background:var(--accent);color:#fff;border-radius:5px;padding:2px 10px;font-size:13px;margin-right:10px;vertical-align:3px;font-family:var(--mono)}
+h3{font-size:16px;color:var(--accent);margin:22px 0 10px}
+p{margin-bottom:12px}
+.card{background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:20px 22px;margin-bottom:16px}
+.card-title{font-size:15px;font-weight:700;margin-bottom:10px;display:flex;align-items:center;gap:8px}
+.tag{font-size:11px;padding:2px 8px;border-radius:4px;font-weight:600}
+.tag-info{background:rgba(91,140,255,.15);color:var(--accent)}
+.tag-pos{background:rgba(52,211,153,.15);color:var(--pos)}
+.tag-neg{background:rgba(251,113,133,.15);color:var(--neg)}
+.tag-mid{background:rgba(251,191,36,.15);color:var(--mid)}
+.verdict{background:linear-gradient(135deg,rgba(91,140,255,.08),rgba(52,211,153,.06));border:1px solid var(--accent);border-left:4px solid var(--accent);border-radius:10px;padding:16px 20px;margin:14px 0}
+.verdict.red{border-color:var(--neg);border-left-color:var(--neg);background:linear-gradient(135deg,rgba(251,113,133,.08),rgba(251,113,133,.03))}
+/* 核心结论速览（执行摘要式） */
+.brief{position:relative;background:linear-gradient(135deg,rgba(91,140,255,.08),rgba(91,140,255,.015));border:1px solid var(--border);border-left:4px solid var(--accent);border-radius:10px;padding:20px 22px;margin:14px 0}
+.brief.good{border-left-color:var(--pos)}
+.brief.warn{border-left-color:var(--mid)}
+.brief.danger{border-left-color:var(--neg)}
+.brief .brief-lead{font-size:16.5px;font-weight:600;line-height:1.9;color:var(--text)}
+.brief .brief-meta{margin-top:10px;font-size:11.5px;color:var(--text2);font-family:var(--mono);letter-spacing:.3px}
+.kpi-strip{display:grid;grid-template-columns:repeat(auto-fit,minmax(116px,1fr));gap:1px;background:var(--border);border:1px solid var(--border);border-radius:10px;overflow:hidden;margin:14px 0}
+@media(max-width:640px){.kpi-strip{grid-template-columns:repeat(2,1fr)}}
+.kpi-item{background:var(--panel2);padding:14px 12px;text-align:center}
+.kpi-item .kpi-val{display:block;font-family:var(--mono);font-variant-numeric:tabular-nums;font-size:23px;font-weight:800;line-height:1.15;letter-spacing:-.5px;white-space:nowrap}
+.kpi-item .kpi-val.pos{color:var(--pos)}
+.kpi-item .kpi-val.neg{color:var(--neg)}
+.kpi-item .kpi-val.warn{color:var(--mid)}
+.kpi-item .kpi-val.phase{color:var(--accent)}
+.kpi-item .kpi-val.total{color:var(--text)}
+.kpi-item .kpi-lbl{display:block;font-size:10.5px;color:var(--text2);margin-top:5px;letter-spacing:.6px}
+.verdict-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:14px 0}
+@media(max-width:640px){.verdict-grid{grid-template-columns:1fr}}
+.vc{position:relative;background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:14px 16px;overflow:hidden}
+.vc::before{content:'';position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--text2)}
+.vc.vc-good::before{background:var(--pos)}
+.vc.vc-warn::before{background:var(--mid)}
+.vc.vc-danger::before{background:var(--neg)}
+.vc.vc-info::before{background:var(--accent)}
+.vc .vc-head{display:flex;align-items:center;gap:8px;margin-bottom:8px}
+.vc .vc-tick{width:7px;height:7px;border-radius:50%;background:var(--text2);flex-shrink:0}
+.vc.vc-good .vc-tick{background:var(--pos);box-shadow:0 0 6px rgba(52,211,153,.6)}
+.vc.vc-warn .vc-tick{background:var(--mid);box-shadow:0 0 6px rgba(251,191,36,.6)}
+.vc.vc-danger .vc-tick{background:var(--neg);box-shadow:0 0 6px rgba(251,113,133,.6)}
+.vc.vc-info .vc-tick{background:var(--accent);box-shadow:0 0 6px rgba(91,140,255,.6)}
+.vc .vc-tag{font-size:9.5px;font-weight:800;letter-spacing:1px;color:var(--text2);text-transform:uppercase}
+.vc .vc-title{font-size:13.5px;font-weight:700;color:var(--text);margin-bottom:4px;line-height:1.6}
+.vc .vc-text{font-size:12.5px;line-height:1.75;color:var(--text2)}
+.vc .vc-text b{color:var(--text)}
+table{width:100%;border-collapse:collapse;margin:12px 0 18px;font-size:13px}
+th{background:var(--panel2);color:var(--text);text-align:left;padding:9px 12px;border:1px solid var(--border);font-weight:600}
+td{padding:9px 12px;border:1px solid var(--border);color:var(--text2);vertical-align:top}
+td b{color:var(--text)}
+.kpi-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin:14px 0}
+.kpi{background:var(--panel2);border:1px solid var(--border);border-radius:10px;padding:14px;text-align:center}
+.kpi .val{font-size:22px;font-weight:700;color:var(--accent);font-family:var(--mono);font-variant-numeric:tabular-nums;letter-spacing:-.5px}
+.kpi .val.warn{color:var(--neg)}
+.kpi .val.ok{color:var(--pos)}
+.kpi .lbl{font-size:12px;color:var(--text2);margin-top:4px}
+.bar-row{display:flex;align-items:center;margin-bottom:7px;font-size:13px}
+.bar-label{width:110px;color:var(--text2);flex-shrink:0}
+.bar-track{flex:1;background:var(--panel2);border-radius:4px;height:20px;overflow:hidden}
+.bar-fill{height:100%;border-radius:4px;display:flex;align-items:center;padding-left:8px;font-size:12px;color:#fff;font-weight:600;min-width:30px;font-family:var(--mono)}
+.bar-val{width:70px;text-align:right;color:var(--text2);font-size:12px;flex-shrink:0;font-family:var(--mono)}
+.timeline{position:relative;padding-left:26px;margin:14px 0}
+.timeline::before{content:"";position:absolute;left:8px;top:4px;bottom:4px;width:2px;background:var(--border)}
+.tl-item{position:relative;margin-bottom:18px}
+.tl-item::before{content:"";position:absolute;left:-23px;top:6px;width:10px;height:10px;border-radius:50%;background:var(--accent);border:2px solid var(--bg)}
+.tl-item.evo-growth::before,.tl-item.evo-peak::before{background:var(--pos)}
+.tl-item.evo-decline::before{background:var(--neg)}
+.tl-date{font-size:12px;color:var(--accent);font-weight:600;font-family:var(--mono)}
+.tl-title{font-weight:700;margin-bottom:3px}
+.tl-body{color:var(--text2);font-size:13px}
+.evo-phase{display:inline-block;padding:1px 8px;border-radius:4px;font-size:10px;font-weight:700;margin-right:8px;background:var(--panel2);color:var(--accent)}
+.signal{padding:10px 14px;border-left:3px solid;border-bottom:1px solid var(--border);font-size:12px;border-radius:0 6px 0 0}
+.signal-red{border-left-color:var(--neg);background:rgba(251,113,133,.04)}
+.signal-orange{border-left-color:var(--mid);background:rgba(251,191,36,.03)}
+.signal-yellow{border-left-color:var(--mid);background:rgba(251,191,36,.02)}
+.signal-green{border-left-color:var(--pos);background:rgba(52,211,153,.02)}
+.signal-badge{font-size:9px;font-weight:800;padding:2px 8px;border-radius:4px;background:var(--panel2);color:var(--text);letter-spacing:.5px}
+.signal-type{font-size:10px;color:var(--text2);margin-left:8px;font-family:var(--mono)}
+.signal-desc{color:var(--text);line-height:1.6;margin-top:4px}
+.signal-action{margin-top:4px;font-size:10.5px;color:var(--accent)}
+.signal-evi{padding-left:16px;font-size:11px;color:var(--text2);margin-top:4px}
+.comment-text{font-size:12px;line-height:1.8;color:var(--text2)}
+.sent{display:inline-block;padding:1px 8px;border-radius:4px;font-size:11px;font-weight:600}
+.sent-pos{background:rgba(52,211,153,.15);color:var(--pos)}
+.sent-neg{background:rgba(251,113,133,.15);color:var(--neg)}
+.sent-mid{background:rgba(251,191,36,.15);color:var(--mid)}
+.sent-mix{background:rgba(167,139,250,.15);color:var(--mix)}
+blockquote{border-left:3px solid var(--accent);background:var(--panel2);padding:12px 16px;margin:12px 0;border-radius:0 8px 8px 0;color:var(--text2)}
+ul,ol{padding-left:22px;margin-bottom:12px}
+li{margin:5px 0;color:var(--text2)}
+li b{color:var(--text)}
+.note{font-size:12.5px;color:var(--text2);background:var(--panel2);border-radius:8px;padding:10px 14px;margin:12px 0}
+.footer{margin-top:50px;padding-top:20px;border-top:1px solid var(--border);color:var(--text2);font-size:12.5px;text-align:center;font-family:var(--mono)}
+.echart-box{width:100%;margin:12px 0 4px}
+.src{display:block;font-size:12px;color:var(--text2);margin-top:6px}
+code{background:var(--panel2);border:1px solid var(--border);border-radius:4px;padding:1px 5px;font-family:var(--mono);font-size:12px;color:var(--accent)}
+@media print{.card,.verdict,table{break-inside:avoid}.echart-box{height:240px!important}}
+@media(max-width:640px){
+  body{font-size:14px}
+  .container{padding:0 16px 40px}
+  .header{padding:32px 0 24px}
+  .header h1{font-size:22px;overflow-wrap:anywhere}
+  .header .sub{font-size:13px}
+  h2.sec{font-size:19px;margin:34px 0 16px}
+  h3{font-size:15px}
+  .card{padding:14px 16px}
+  p,li,td,th,blockquote,.comment-text,.signal-desc,.tl-body,.src{overflow-wrap:anywhere}
+  .meta-chip{font-size:11.5px}
+  .kpi .val{font-size:19px}
+}
+"""
+
+
+# ============================================================
+# ECharts：图表主题 + 构建器 + 渲染脚本
+# 格式化数据不统一：情感用环形、来源用条形、趋势用折线、竞品用条形，各取所需形态
+# ============================================================
+
+ECHARTS_BASE = {
+    "backgroundColor": "transparent",
+    "color": ["#5b8cff", "#34d399", "#fb7185", "#fbbf24", "#a78bfa", "#22d3ee"],
+    "textStyle": {"color": "#8b9bc0"},
+    "tooltip": {"backgroundColor": "#141d33", "borderColor": "#1d2943", "borderWidth": 1,
+                "textStyle": {"color": "#e6ecf7", "fontSize": 12}},
+    "legend": {"textStyle": {"color": "#8b9bc0"}, "itemWidth": 10, "itemHeight": 10},
+}
+
+
+def _doughnut_option(items, center_label):
+    """情感结构：环形图。items: [(name, value)]"""
+    return {
+        "tooltip": {"trigger": "item"},
+        "legend": {"bottom": 0},
+        "series": [{
+            "type": "pie", "radius": ["52%", "72%"], "center": ["50%", "44%"],
+            "itemStyle": {"borderColor": "#101828", "borderWidth": 2},
+            "label": {"color": "#8b9bc0", "formatter": "{b} {d}%"},
+            "data": [{"name": n, "value": v} for n, v in items],
+        }],
+        "graphic": [{"type": "text", "left": "center", "top": "37%",
+                     "style": {"text": center_label, "fill": "#8b9bc0", "fontSize": 12}}],
+    }
+
+
+def _hbar_option(items):
+    """来源/竞品分布：横向条形图。items: [(name, value)]"""
+    names = [n for n, _ in items]
+    vals = [v for _, v in items]
+    return {
+        "tooltip": {"trigger": "axis", "axisPointer": {"type": "shadow"}},
+        "grid": {"left": 8, "right": 24, "top": 8, "bottom": 8, "containLabel": True},
+        "xAxis": {"type": "value", "splitLine": {"lineStyle": {"color": "#141d33"}}},
+        "yAxis": {"type": "category", "data": names, "axisLabel": {"color": "#8b9bc0"}},
+        "series": [{"type": "bar", "data": vals, "barMaxWidth": 18,
+                    "itemStyle": {"borderRadius": [0, 4, 4, 0]}}],
+    }
+
+
+def _line_option(dates, counts):
+    """每日趋势：面积折线图。"""
+    return {
+        "tooltip": {"trigger": "axis"},
+        "grid": {"left": 8, "right": 16, "top": 24, "bottom": 8, "containLabel": True},
+        "xAxis": {"type": "category", "boundaryGap": False, "data": dates,
+                  "axisLabel": {"color": "#8b9bc0"}},
+        "yAxis": {"type": "value", "splitLine": {"lineStyle": {"color": "#141d33"}}},
+        "series": [{
+            "type": "line", "data": counts, "smooth": True, "symbol": "circle", "symbolSize": 6,
+            "lineStyle": {"width": 2, "color": "#5b8cff"},
+            "areaStyle": {"color": {"type": "linear", "x": 0, "y": 0, "x2": 0, "y2": 1,
+                                    "colorStops": [{"offset": 0, "color": "rgba(91,140,255,.35)"},
+                                                   {"offset": 1, "color": "rgba(91,140,255,.02)"}]}},
+        }],
+    }
+
+
+def _chart_box(cid, height=280):
+    return f'<div class="echart-box" id="{cid}" style="height:{height}px"></div>'
+
+
+def _charts_script(charts):
+    if not charts:
+        return ""
+    payload = json.dumps({"__base__": ECHARTS_BASE, "__charts__": charts}, ensure_ascii=False)
+    return f"""<script>
+(function() {{
+  if (typeof echarts === 'undefined') return;
+  var C = {payload};
+  var insts = [];
+  Object.keys(C.__charts__).forEach(function(id) {{
+    var el = document.getElementById(id);
+    if (!el) return;
+    var chart = echarts.init(el);
+    chart.setOption(Object.assign({{}}, C.__base__, C.__charts__[id]));
+    insts.push(chart);
+  }});
+  window.addEventListener('resize', function() {{ insts.forEach(function(c) {{ c.resize(); }}); }});
+}})();
+</script>"""
+
+
+_ECHARTS_JS = None
+
+
+def _get_echarts_js():
+    """ECharts 源码（自包含报告内联用）。"""
+    global _ECHARTS_JS
+    if _ECHARTS_JS is None:
+        try:
+            p = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "assets", "echarts.min.js")
+            _ECHARTS_JS = open(p, encoding="utf-8").read()
+        except Exception:
+            _ECHARTS_JS = ""
+    return _ECHARTS_JS
+
+
+def _report_header(a):
+    return f"""<div class="header">
   <div class="inner">
-    <h1>{esc(a['meta']['topic'])} · 深度调研报告</h1>
+    <div class="eyebrow">MYOU DATA RESEARCH · 数据驱动 · 汇报就绪</div>
+    <h1>{esc(a['meta']['topic'])} · 深度调研看板</h1>
     <div class="sub">数据驱动自动生成 · 情绪全景 · 来源追溯 · 操纵判断 · 风险矩阵 · 行动建议</div>
     <div class="meta-grid">
       <div class="meta-chip">场景：<b>{a['scenario']}</b></div>
@@ -446,12 +597,29 @@ li b{{color:var(--text)}}
       <div class="meta-chip">生成时间：{datetime.now().strftime("%Y-%m-%d %H:%M")}</div>
     </div>
   </div>
-</div>
+</div>"""
+
+
+def _html_head(a, echarts_inline=False):
+    echarts_tag = f"<script>{_get_echarts_js()}</script>" if echarts_inline else ""
+    return f"""<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{esc(a['meta']['topic'])} - 深度调研看板</title>
+<style>
+{REPORT_CSS}
+</style>
+{echarts_tag}
+</head>
+<body>
+{_report_header(a)}
 <div class="container">
 """
 
 
-def _html_footer(a):
+def _report_footer(a):
     qr_b64 = ""
     try:
         qr_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "assets", "qr_base64.txt")
@@ -463,75 +631,147 @@ def _html_footer(a):
 <div class="footer">
   <p>由 myou-data-research 数据调研引擎自动生成 · {datetime.now().strftime("%Y-%m-%d %H:%M")}</p>
   {qr_html}
-</div>
+</div>"""
+
+
+def _html_footer(a):
+    return _report_footer(a) + """
 </div>
 </body>
 </html>"""
 
 
 # ============================================================
-# 13 章节渲染
+# 15 章节渲染（0 方法论 + 1-14 数据章节）
 # ============================================================
 
+def _md_inline(text):
+    """极简 markdown 行内 → HTML：加粗、行内代码。"""
+    text = esc(text)
+    text = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", text)
+    text = re.sub(r"`(.+?)`", r"<code>\1</code>", text)
+    return text
+
+
+def _sec_methodology(a):
+    """调研方法论：每个话题独立生成（存于 research.md），原样呈现。"""
+    m = (a.get("methodology") or "").strip()
+    if not m:
+        m = "（尚未生成本话题专属调研方法论。可先用启发式生成，再由调研人改写：`data_store.py set-methodology <topic_id> <文本>`）"
+    paras = []
+    for block in m.split("\n\n"):
+        block = block.strip()
+        if not block:
+            continue
+        lines = block.split("\n")
+        if lines[0].startswith("> "):
+            body = " ".join(l[2:].strip() if l.startswith("> ") else l.strip() for l in lines)
+            paras.append(f"<blockquote>{_md_inline(body)}</blockquote>")
+        elif lines[0].startswith("- "):
+            items = "".join(f"<li>{_md_inline(l[2:].strip())}</li>" for l in lines if l.strip().startswith("- "))
+            paras.append(f"<ul>{items}</ul>")
+        else:
+            paras.append(f"<p>{_md_inline(' '.join(x.strip() for x in lines))}</p>")
+    return f"""
+<section>
+<h2 class="sec"><span class="num">0</span>调研方法论</h2>
+{''.join(paras)}
+</section>"""
+
+
 def _sec1_overview(a):
-    """核心结论速览：由信号/情绪/阶段推导，无数据章节自动隐藏。"""
+    """核心结论速览（执行摘要式）：总述 + 关键指标带 + 分级结论卡片网格。"""
     pos_ratio, neg_ratio = a["pos_ratio"], a["neg_ratio"]
     total = a["total"]
-    verdicts = []
 
-    # 情绪基调结论
+    # 情绪基调总述（lead）
     if pos_ratio >= 0.6:
-        base = f"当前情绪以正面为主（{pos_ratio*100:.0f}%），讨论基调积极，品牌叙事占据主导地位"
+        lead, lead_cls = f"当前情绪以正面为主（{pos_ratio*100:.0f}%），讨论基调积极，品牌叙事占据主导地位", "good"
     elif pos_ratio >= 0.45:
-        base = f"正面情绪占比 {pos_ratio*100:.0f}%，但负面已占 {neg_ratio*100:.0f}%，情绪处于正负博弈阶段"
+        lead, lead_cls = f"正面情绪占比 {pos_ratio*100:.0f}%，但负面已占 {neg_ratio*100:.0f}%，情绪处于正负博弈阶段", "warn"
     else:
-        base = f"负面情绪占比达 {neg_ratio*100:.0f}%，情绪面承压，需重点关注负面议题的扩散路径"
-    verdicts.append(f'<div class="verdict"><h4>情绪基调</h4><p>{base}（基于 {total} 条采样数据）。</p></div>')
+        lead, lead_cls = f"负面情绪占比达 {neg_ratio*100:.0f}%，情绪面承压，需重点关注负面议题的扩散路径", "danger"
+
+    # 关键指标带
+    critical = [s for s in a["signals"] if s.get("severity") in ("critical", "high")]
+    kpis = [
+        ("pos", f"{pos_ratio*100:.0f}%", "正面占比"),
+        ("neg", f"{neg_ratio*100:.0f}%", "负面占比"),
+        ("phase", PHASE_LABELS.get(a["last_phase"], a["last_phase"]), "当前阶段"),
+        ("warn", str(len(critical)), "严重/高风险"),
+        ("total", str(total), "采样数据"),
+    ]
+    kpi_html = "".join(f'<div class="kpi-item"><span class="kpi-val {cls}">{v}</span><span class="kpi-lbl">{lbl}</span></div>'
+                       for cls, v, lbl in kpis)
+
+    # 结论卡片（分级配色）
+    cards = []
 
     # 阶段结论
-    verdicts.append(f'<div class="verdict"><h4>当前阶段</h4><p>话题处于<b>{PHASE_LABELS.get(a["last_phase"], a["last_phase"])}</b>：{a["phase_forecast"]}</p></div>')
+    cards.append(f'<div class="vc vc-info"><div class="vc-head"><span class="vc-tick"></span><span class="vc-tag">当前阶段</span></div>'
+                 f'<div class="vc-title">{PHASE_LABELS.get(a["last_phase"], a["last_phase"])}</div>'
+                 f'<div class="vc-text">{a["phase_forecast"]}</div></div>')
 
     # 关键信号结论（最高严重度的 2 条）
-    critical = [s for s in a["signals"] if s.get("severity") in ("critical", "high")]
     for sig in critical[:2]:
         sev_label = SEVERITY_LABELS.get(sig.get("severity"), sig.get("severity"))
-        verdicts.append(f'<div class="verdict red"><h4>{sev_label}信号：{TYPE_LABELS.get(sig.get("type", ""), sig.get("type", "监测"))}</h4>'
-                        f'<p>{esc(sig.get("description", ""))}</p></div>')
+        sev_cls = "danger" if sig.get("severity") == "critical" else "warn"
+        cards.append(f'<div class="vc vc-{sev_cls}"><div class="vc-head"><span class="vc-tick"></span>'
+                     f'<span class="vc-tag">{sev_label}信号 · {TYPE_LABELS.get(sig.get("type", ""), sig.get("type", "监测"))}</span></div>'
+                     f'<div class="vc-title">{esc(sig.get("description", ""))}</div></div>')
 
     # 操纵/风险结论
     if a["manipulation_evidence"]:
-        verdicts.append(f'<div class="verdict red"><h4>操纵/抹黑迹象</h4><p>数据中发现 {len(a["manipulation_evidence"])} 条与「抹黑 / AI投毒 / 黑公关」相关的风险信号，详见第 7 章。</p></div>')
+        cards.append(f'<div class="vc vc-danger"><div class="vc-head"><span class="vc-tick"></span><span class="vc-tag">操纵/抹黑迹象</span></div>'
+                     f'<div class="vc-text">数据中发现 <b>{len(a["manipulation_evidence"])}</b> 条与「抹黑 / AI投毒 / 黑公关」相关的风险信号，详见第 6 章。</div></div>')
     else:
-        verdicts.append('<div class="verdict"><h4>操纵/抹黑迹象</h4><p>当前数据中未发现明确的抹黑 / AI投毒 / 水军操纵信号，情绪以自然发酵为主。</p></div>')
+        cards.append('<div class="vc vc-good"><div class="vc-head"><span class="vc-tick"></span><span class="vc-tag">操纵/抹黑迹象</span></div>'
+                     '<div class="vc-text">未发现明确的抹黑 / AI投毒 / 水军操纵信号，情绪以自然发酵为主。</div></div>')
 
     # 竞品结论
     if a["competitors"]:
         top_c = a["competitors"][0]
-        verdicts.append(f'<div class="verdict"><h4>竞品对比焦点</h4><p>讨论中最常被提及的对比对象是<b>{esc(top_c["name"])}</b>（出现 {top_c["count"]} 次），竞品对比叙事活跃，详见第 9 章。</p></div>')
+        cards.append(f'<div class="vc vc-info"><div class="vc-head"><span class="vc-tick"></span><span class="vc-tag">竞品对比焦点</span></div>'
+                     f'<div class="vc-text">最常被提及的对比对象是 <b>{esc(top_c["name"])}</b>（出现 {top_c["count"]} 次），竞品对比叙事活跃，详见第 8 章。</div></div>')
 
     return f"""
 <section>
 <h2 class="sec"><span class="num">1</span>核心结论速览</h2>
-{''.join(verdicts)}
+<div class="brief {lead_cls}">
+  <div class="brief-lead">{lead}。</div>
+  <div class="brief-meta">场景 {a['scenario']} · 情绪结构：正面 {a['sent_dist'].get('positive', 0)} / 中性 {a['sent_dist'].get('neutral', 0)} / 负面 {a['sent_dist'].get('negative', 0)} / 混合 {a['sent_dist'].get('mixed', 0)}</div>
+</div>
+<div class="kpi-strip">{kpi_html}</div>
+<div class="verdict-grid">{''.join(cards)}</div>
 </section>"""
 
 
 def _sec2_data(a):
-    """调研数据基础：数据量、平台、时间、关键词矩阵。"""
-    sent_bars = ""
-    for s in ["positive", "neutral", "negative", "mixed"]:
-        n = a["sent_dist"].get(s, 0)
-        pct = n / a["total"] * 100
-        sent_bars += f'''<div class="bar-row"><div class="bar-label">{SENT_LABELS[s]}</div>
-        <div class="bar-track"><div class="bar-fill" style="width:{pct:.1f}%;background:{SENT_COLORS[s]};">{n}</div></div>
-        <div class="bar-val">{pct:.1f}%</div></div>'''
+    """调研数据基础：数据量、平台、时间、关键词矩阵（图表用 ECharts，形态随数据而异）。"""
+    charts = a["charts"]
 
-    plat_bars = ""
-    for p, n in a["plat_dist"].most_common(8):
-        pct = n / a["total"] * 100
-        plat_bars += f'''<div class="bar-row"><div class="bar-label">{PLAT_LABELS.get(p, p)}</div>
-        <div class="bar-track"><div class="bar-fill" style="width:{pct:.1f}%;background:#4f8cff;">{n}</div></div>
-        <div class="bar-val">{pct:.1f}%</div></div>'''
+    # 情感结构 → 环形图
+    sent_items = [(SENT_LABELS[s], a["sent_dist"].get(s, 0)) for s in ["positive", "neutral", "negative", "mixed"]]
+    sent_items = [(n, v) for n, v in sent_items if v > 0]
+    sent_html = _chart_box("chart-sent", 260)
+    if sent_items:
+        charts["chart-sent"] = _doughnut_option(sent_items, f"共 {a['total']} 条")
+
+    # 平台结构 → 横向条形图
+    plat_items = [(PLAT_LABELS.get(p, p), n) for p, n in a["plat_dist"].most_common(8)]
+    plat_html = ""
+    if plat_items:
+        plat_html = _chart_box("chart-plat", min(60 + 30 * len(plat_items), 340))
+        charts["chart-plat"] = _hbar_option(plat_items)
+
+    # 每日趋势 → 面积折线图（≥2 天才有意义）
+    daily_html = ""
+    daily_items = sorted(a["daily_dist"].items())
+    if len(daily_items) >= 2:
+        dates = [d[5:] for d, _ in daily_items]
+        counts = [c for _, c in daily_items]
+        daily_html = _chart_box("chart-daily", 260)
+        charts["chart-daily"] = _line_option(dates, counts)
 
     kws = "、".join(a["top_keywords"][:15])
     return f"""
@@ -539,11 +779,16 @@ def _sec2_data(a):
 <h2 class="sec"><span class="num">2</span>调研数据基础</h2>
 <div class="card">
   <div class="card-title">情绪分布（{a['total']} 条）<span class="tag tag-info">情感结构</span></div>
-  {sent_bars}
+  <p>正面 {a['sent_dist'].get('positive', 0)} 条（{a['pos_ratio']*100:.0f}%）、中性 {a['sent_dist'].get('neutral', 0)} 条、负面 {a['sent_dist'].get('negative', 0)} 条（{a['neg_ratio']*100:.0f}%）、混合 {a['sent_dist'].get('mixed', 0)} 条。</p>
+  {sent_html}
 </div>
 <div class="card">
   <div class="card-title">平台分布<span class="tag tag-info">渠道结构</span></div>
-  {plat_bars}
+  {plat_html}
+</div>
+<div class="card">
+  <div class="card-title">每日数据量趋势<span class="tag tag-info">发酵曲线</span></div>
+  {daily_html}
 </div>
 <div class="card">
   <div class="card-title">监控关键词<span class="tag tag-info">高频词 TOP 15</span></div>
@@ -706,16 +951,22 @@ def _sec7_kol(a):
 
 
 def _sec8_competitor(a):
-    """竞品对比分析。"""
+    """竞品对比分析（横向条形图呈现提及频次）。"""
     if not a["competitors"]:
         return ""
-    rows = "".join(f'<tr><td><b>{esc(c["name"])}</b></td><td>{c["count"]}</td></tr>' for c in a["competitors"][:12])
+    comps = a["competitors"][:10]
+    rows = "".join(f'<tr><td><b>{esc(c["name"])}</b></td><td>{c["count"]}</td></tr>' for c in comps)
+    chart_html = ""
+    if len(comps) >= 2:
+        a["charts"]["chart-competitor"] = _hbar_option([(c["name"], c["count"]) for c in comps])
+        chart_html = _chart_box("chart-competitor", min(60 + 32 * len(comps), 340))
     return f"""
 <section>
 <h2 class="sec"><span class="num">8</span>竞品对比分析</h2>
 <div class="card">
   <div class="card-title">讨论中高频出现的对比对象<span class="tag tag-info">按提及频次</span></div>
   <p>用户讨论中频繁将话题对象与以下品牌/车型进行对比，反映用户心智中的竞品格局：</p>
+  {chart_html}
   <table><tr><th>对比对象</th><th>提及频次</th></tr>{rows}</table>
 </div>
 </section>"""
@@ -843,6 +1094,25 @@ def _sec14_entries(a):
 </section>"""
 
 
+def render_report_body(a):
+    """Concatenate all non-empty report sections for a topic analysis payload."""
+    sections = [
+        _sec_methodology(a), _sec1_overview(a), _sec2_data(a), _sec3_positive(a), _sec4_negative(a),
+        _sec5_source(a), _sec6_manipulation(a), _sec7_kol(a), _sec8_competitor(a),
+        _sec9_risk(a), _sec10_forecast(a), _sec11_actions(a), _sec12_evolution(a),
+        _sec13_comments(a), _sec14_entries(a),
+    ]
+    # 空章节（无对应数据）自动隐藏
+    body = "\n".join(s for s in sections if s)
+    return body + _charts_script(a["charts"])
+
+
+def get_topic_report(topic_id):
+    """Analyze a topic and render its report body. Returns (payload, body_html)."""
+    a = analyze_topic(topic_id)
+    return a, render_report_body(a)
+
+
 def generate_html_report(topic_id: str, output_path: str = None) -> str:
     """Generate a data-driven deep HTML report (self-contained) from topic data.
 
@@ -853,16 +1123,9 @@ def generate_html_report(topic_id: str, output_path: str = None) -> str:
     if not output_path:
         output_path = os.path.join(get_topic_dir(topic_id), "report.html")
 
-    sections = [
-        _sec1_overview(a), _sec2_data(a), _sec3_positive(a), _sec4_negative(a),
-        _sec5_source(a), _sec6_manipulation(a), _sec7_kol(a), _sec8_competitor(a),
-        _sec9_risk(a), _sec10_forecast(a), _sec11_actions(a), _sec12_evolution(a),
-        _sec13_comments(a), _sec14_entries(a),
-    ]
-    # 空章节（无对应数据）自动隐藏
-    body = "\n".join(s for s in sections if s)
+    body = render_report_body(a)
 
-    html = _html_head(a) + body + _html_footer(a)
+    html = _html_head(a, echarts_inline=True) + body + _html_footer(a)
     with open(output_path, "w", encoding="utf-8") as f:
         f.write(html)
     return output_path
