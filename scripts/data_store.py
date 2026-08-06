@@ -26,7 +26,7 @@ SEP = " || "
 EMPTY = "（暂无）"
 
 FRONT_KEYS = ["topic", "topic_id", "scenario", "keywords", "sources",
-              "created_at", "updated_at", "collection_count", "status"]
+              "financial", "created_at", "updated_at", "collection_count", "status"]
 
 
 # ============================================================
@@ -35,6 +35,8 @@ FRONT_KEYS = ["topic", "topic_id", "scenario", "keywords", "sources",
 
 def detect_scenario(topic, keywords):
     text = (topic + " " + " ".join(keywords or [])).lower()
+    if any(k in text for k in ["金融单品", "单品追踪", "热品", "交易机会", "机会发现", "标的", "建仓", "股价背离", "交付量追踪", "销量追踪", "个股追踪", "个股"]):
+        return "金融单品追踪"
     if any(k in text for k in ["股票", "投资", "估值", "财报", "业绩", "基金", "股价", "市值", "持仓", "证券", "上市公司", "ipo", "融资"]):
         return "投资研究"
     if any(k in text for k in ["发布", "新品", "上市", "首发", "预售", "交付", "提车", "开售", "发布会"]):
@@ -50,6 +52,19 @@ def suggest_methodology(topic, keywords=None, scenario=None):
     kw = "、".join((keywords or [])[:8]) or "（随采集补充）"
 
     base = {
+        "金融单品追踪": {
+            "goal": f"围绕「{topic}」做企业单品的持续追踪：监测单品声量/情绪/口碑势能，横向排名同公司热品，并据此发现潜在交易机会（信号→盈利映射→股价背离→催化剂→机会评分）。",
+            "questions": [
+                f"「{topic}」单品的声量与情绪势能处于什么位置、趋势如何？",
+                f"在同公司产品矩阵（及跨市场）中，它是否属于热品、热度为几何？",
+                f"单品势能、口碑与该公司股价/估值之间是否存在背离（错配即机会）？",
+                f"近期有哪些催化剂（发布/交付/财报/大单）可能触发重估？",
+            ],
+            "sources": "社交平台声量（小红书/抖音/微博）、电商与交付数据、东方财富/雪球股价与估值、公司公告与财报、行业销量数据",
+            "dims": "单品声量与情绪 / 口碑与痛点 / 竞品对标 / 同公司热品排名 / 股价背离度 / 催化剂日历 / 交易机会评分",
+            "metrics": "单品热度分、正向情绪净分、口碑痛点数、同公司热品排名、股价背离度、催化剂密度、机会评分(0-100)与方向",
+            "cadence": "常规按天追踪声量与情绪；财报/交付/发布窗口加密到小时级，重点捕捉势能拐点与背离",
+        },
         "投资研究": {
             "goal": f"围绕「{topic}」的投资价值与风险变化，持续追踪市场预期、业绩与资金动向，为投资决策提供证据链。",
             "questions": [
@@ -142,6 +157,8 @@ def md_path(topic_id):
 def _fmt_value(v):
     if isinstance(v, list):
         return ", ".join(str(x) for x in v)
+    if isinstance(v, dict):
+        return json.dumps(v, ensure_ascii=False)
     return str(v)
 
 
@@ -163,6 +180,12 @@ def _parse_front_matter(text):
     for k in ("collection_count",):
         if k in meta and meta[k].isdigit():
             meta[k] = int(meta[k])
+    # financial 以 JSON 字符串存储，读回时还原为 dict
+    if "financial" in meta and meta["financial"]:
+        try:
+            meta["financial"] = json.loads(meta["financial"])
+        except (json.JSONDecodeError, TypeError):
+            meta["financial"] = {}
     return meta
 
 
@@ -493,8 +516,14 @@ def _migrate_legacy(topic_id):
 # 对外 API（签名与 JSON 版一致）
 # ============================================================
 
-def init_topic(topic: str, keywords: list = None, sources: list = None, scenario: str = None) -> dict:
-    """Initialize a new research topic. Returns the topic metadata."""
+def init_topic(topic: str, keywords: list = None, sources: list = None, scenario: str = None, financial: dict = None) -> dict:
+    """Initialize a new research topic. Returns the topic metadata.
+
+    financial: 金融单品追踪专用实体块，形如
+        {"company": "小米集团", "ticker": "1810.HK", "product": "小米SU7",
+         "product_line": "汽车", "watch_type": "single_product",
+         "launch_date": "2024-03-28", "price_band": "21.59-29.99万"}
+    """
     topic_id = sanitize_topic_id(topic)
     scenario = scenario or detect_scenario(topic, keywords or [])
     meta = {
@@ -503,6 +532,7 @@ def init_topic(topic: str, keywords: list = None, sources: list = None, scenario
         "keywords": keywords or [],
         "sources": sources or [],
         "scenario": scenario,
+        "financial": financial or {},
         "created_at": datetime.now(timezone.utc).isoformat(),
         "updated_at": datetime.now(timezone.utc).isoformat(),
         "collection_count": 0,
@@ -512,6 +542,15 @@ def init_topic(topic: str, keywords: list = None, sources: list = None, scenario
             "entries": [], "signals": [], "evolution": [], "snapshots": []}
     _save_md(topic_id, data)
     return meta
+
+
+def set_financial(topic_id: str, financial: dict):
+    """为话题设置/更新金融实体块（公司/股票代码/单品/追踪类型等）。"""
+    data = _load_md(topic_id)
+    data["meta"]["financial"] = financial or {}
+    data["meta"]["updated_at"] = datetime.now(timezone.utc).isoformat()
+    _save_md(topic_id, data)
+    return data["meta"]["financial"]
 
 
 def load_topic_meta(topic_id: str) -> dict:

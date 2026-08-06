@@ -16,6 +16,7 @@ from datetime import datetime
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from data_store import get_topic_summary, list_topics, get_topic_dir, get_methodology
+import finance_analysis  # 金融单品追踪引擎（仅依赖 data_store，无循环依赖）
 
 try:
     from reportlab.lib.pagesizes import A4
@@ -198,8 +199,10 @@ def esc(s):
 
 
 def detect_scenario(topic, keywords):
-    """Match analysis scenario from topic text (investment/product/industry/sentiment)."""
+    """Match analysis scenario from topic text (finance-single-product/investment/product/industry/sentiment)."""
     text = (topic + " " + " ".join(keywords)).lower()
+    if any(k in text for k in ["金融单品", "单品追踪", "热品", "交易机会", "机会发现", "标的", "建仓", "股价背离", "交付量追踪", "销量追踪", "个股追踪", "个股"]):
+        return "金融单品追踪"
     if any(k in text for k in ["股票", "投资", "估值", "财报", "业绩", "基金", "股价", "市值", "持仓", "证券", "上市公司", "ipo", "融资"]):
         return "投资研究"
     if any(k in text for k in ["发布", "新品", "上市", "首发", "预售", "交付", "提车", "开售", "发布会"]):
@@ -344,8 +347,722 @@ def analyze_topic(topic_id):
         "top_keywords": top_keywords(entries),
         "comment_summaries": [e for e in entries if e.get("source") in ("comment_section", "comment_summary") or "评论区总结" in e.get("content", "")],
         "methodology": get_methodology(topic_id),  # 每个话题独立生成的调研方法论
+        # 金融单品追踪：实体块 + 引擎计算结果（仅该场景填充，避免无谓开销）
+        "financial": meta.get("financial") or {},
+        "finance": _finance_block(topic_id, a_scenario) if (a_scenario := detect_scenario(meta["topic"], meta.get("keywords", []))) == "金融单品追踪" else {},
         "charts": {},  # 各章节收集的 ECharts 配置 {id: option}
     }
+
+
+def _finance_block(topic_id, scenario):
+    """当场景为金融单品追踪时，调用 finance_analysis 引擎产出单品健康/热品/机会结果。"""
+    try:
+        fin = finance_analysis.single_product_health(get_topic_summary(topic_id))
+        heat, breakdown = finance_analysis.heat_score(get_topic_summary(topic_id))
+        opp = finance_analysis.discover_opportunities(topic_id)
+        return {"health": fin, "heat": heat, "heat_breakdown": breakdown, "opportunity": opp}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+# ============================================================
+# 报告样式生成（schema-first）：先由数据生成「报告骨架 / 样式」，再填充渲染
+# ============================================================
+#
+# 设计目标（来自产品约束）：
+#   1) 每次调研的「调研策略」与「报告呈现」相互独立、可单独交付给目标用户；
+#   2) 报告生成前，先由数据推导出 report_schema（章节编排 + 块类型 + 图表解读 + 小结），
+#      再统一渲染（先样式、后填充）；
+#   3) 正文信息充分：每个章节按「观察 → 解读 → 小结」组织，文字承载分析而非装饰；
+#   4) 每个可视化图表都带「解读」段与「小结」段（caption + summary），图表与文字双解读；
+#   5) 视觉上不使用边框/盒装饰：section、导语、解读、小结、结论卡、信号均为纯文字流，
+#      仅以颜色标签与章节分隔线区分信息层级（详见 SKILL.md 报告视觉规范）。
+
+REPORT_ACCENTS = {
+    "舆情监控": {"accent": "#5b8cff", "name": "警戒蓝"},
+    "产品发布": {"accent": "#fb923c", "name": "活力橙"},
+    "投资研究": {"accent": "#f5c451", "name": "理性金"},
+    "行业调研": {"accent": "#2dd4bf", "name": "沉稳青"},
+    "金融单品追踪": {"accent": "#16a34a", "name": "机会绿"},
+}
+
+
+def _derive_strategy(a):
+    """从场景 + 方法论推导本话题独立的『调研策略』：目标受众 / 强调维度 / 报告主色调。"""
+    scenario = a["scenario"]
+    AUDIENCE = {
+        "舆情监控": ("公关 / 品牌 / 管理层", ["情绪走向", "风险与操纵", "关键传播者", "争议焦点"]),
+        "产品发布": ("产品 / 市场 / 增长", ["声量与口碑", "配置与价格", "竞品对标", "首销反馈"]),
+        "投资研究": ("投研 / 基金经理 / 投资者", ["业绩与基本面", "资金与机构", "风险事件", "预测研判"]),
+        "行业调研": ("战略 / 行业研究员", ["市场格局", "产业链变量", "政策技术", "趋势研判"]),
+        "金融单品追踪": ("投研 / 交易员 / 个人投资者", ["单品势能", "热品排名", "股价背离", "交易机会"]),
+    }
+    audience, emphasis = AUDIENCE.get(scenario, ("决策相关方", ["核心结论", "风险", "趋势"]))
+    accent = REPORT_ACCENTS.get(scenario, REPORT_ACCENTS["舆情监控"])
+    return {"scenario": scenario, "audience": audience, "emphasis": emphasis,
+            "accent": accent["accent"], "accent_name": accent["name"]}
+
+
+# ---- 图表解读（数据驱动，2-3 句，必带；随后由 _sum_* 给出一句小结）----
+
+def _interpret_sentiment(a):
+    pos, neg = a["pos_ratio"] * 100, a["neg_ratio"] * 100
+    neu = max(0.0, 100 - pos - neg)
+    if pos >= 60:
+        return (f"正面情绪占 {pos:.0f}%（{a['sent_dist'].get('positive', 0)} 条），中性 {neu:.0f}%，负面仅 {neg:.0f}%（{a['sent_dist'].get('negative', 0)} 条）。"
+                f"品牌叙事与产品口碑主导讨论，舆论基本面健康；但需留意正面声量是否被运营动作放大，真实自然口碑占比仍有待观察。")
+    if pos >= 45:
+        return (f"正面 {pos:.0f}% 与负面 {neg:.0f}% 相当接近，中性 {neu:.0f}% 构成缓冲带。"
+                f"舆论处于正负拉锯状态，任何单一负面事件都可能打破平衡，建议对负面议题的首爆点、传播路径与关键放大账号保持高频监测。")
+    return (f"负面已占 {neg:.0f}%（{a['sent_dist'].get('negative', 0)} 条），中性 {neu:.0f}%，正面仅 {pos:.0f}%。"
+            f"情绪面明显承压，当务之急是厘清负面议题的传播链路与来源账号——到底是用户自发不满，还是外部力量推动。")
+
+
+def _interpret_platform(a):
+    if not a["plat_dist"]:
+        return "暂无平台分布数据，无法判断渠道结构，建议补采后研判。"
+    top3 = a["plat_dist"].most_common(3)
+    top = top3[0]
+    share = top[1] / max(a["total"], 1)
+    spread = len(a["plat_dist"])
+    detail = "、".join(f"{PLAT_LABELS.get(p, p)} {n} 条（{n / a['total'] * 100:.0f}%）" for p, n in top3)
+    return (f"声量集中度{'偏高' if share >= 0.5 else '适中'}：榜首为 {PLAT_LABELS.get(top[0], top[0])}（{top[1]} 条，占 {share * 100:.0f}%），共覆盖 {spread} 个渠道，依次为 {detail}。"
+            f"渠道结构直接决定监测与回应策略——单点集中意味着一处失控即可能全局失声，需针对性布防。")
+
+
+def _interpret_daily(a):
+    items = sorted(a["daily_dist"].items())
+    if len(items) < 2:
+        return "采集窗口不足 2 天，暂无法绘制可靠趋势曲线，需延长采集周期后再研判。"
+    peak = max(items, key=lambda x: x[1])
+    first, last = items[0], items[-1]
+    trend = "上升" if last[1] >= first[1] else "回落"
+    rise = "（仍在升温）" if last[1] >= first[1] else "（趋于冷却）"
+    return (f"覆盖 {len(items)} 天，峰值出现在 {peak[0][5:]}（{peak[1]} 条），起止区间为 {first[0][5:]} → {last[0][5:]}。"
+            f"整体呈{trend}走势{rise}。发酵节奏决定响应时机：升温期应抢在峰值前完成定调，回落期则转向长尾口碑沉淀与转化。")
+
+
+def _interpret_competitor(a):
+    if not a["competitors"]:
+        return "讨论中未出现明确竞品对标，叙事以本品自身为主，暂无需纳入横向比较框架。"
+    c = a["competitors"][0]
+    names = "、".join(x["name"] for x in a["competitors"][:3])
+    return (f"最常被对比的对象是 {c['name']}（提及 {c['count']} 次），共出现 {len(a['competitors'])} 个竞品对标：{names}。"
+            f"竞品对标是把双刃剑——既说明本品已进入用户决策的核心比较集，也意味着任何短板都会被拿来横向放大、直接冲击购买意向。")
+
+
+def _interpret_risk(a):
+    if not a["signals"]:
+        return "当前未触发任何风险信号，维持常态监控即可。"
+    from collections import Counter as _C
+    sev = _C(s.get("severity") for s in a["signals"])
+    crit, high, med, low = sev.get("critical", 0), sev.get("high", 0), sev.get("medium", 0), sev.get("low", 0)
+    types = "、".join(sorted({TYPE_LABELS.get(s.get("type", ""), s.get("type", "")) for s in a["signals"] if s.get("type")}))
+    return (f"共命中 {len(a['signals'])} 个风险信号，按严重度分布为：严重 {crit}、高 {high}、中 {med}、低 {low}；涉及维度包括 {types}。"
+            f"信号的结构比数量更关键——少数严重/高级信号往往比一堆低风险更值得优先处置，应优先看严重度而非总数。")
+
+
+# ---- 一句小结（解读之后的结论落点）----
+
+def _sum_sentiment(a):
+    if a["pos_ratio"] >= 0.6:
+        return "情绪面整体健康，维持正面叙事、放大真实口碑即可。"
+    if a["pos_ratio"] >= 0.45:
+        return "正负基本持平，当前关键是压制负面扩散速度、防止平衡被打破。"
+    return "情绪承压，须把负面溯源与主动回应放在最高优先级。"
+
+
+def _sum_platform(a):
+    if not a["plat_dist"]:
+        return "渠道数据缺失，建议补采后再研判。"
+    top = a["plat_dist"].most_common(1)[0]
+    share = top[1] / a["total"]
+    return f"以 {PLAT_LABELS.get(top[0], top[0])} 为核心阵地{'，渠道单一需防单点风险' if share >= 0.5 else '，多渠道分布便于分层运营'}。"
+
+
+def _sum_daily(a):
+    items = sorted(a["daily_dist"].items())
+    if len(items) < 2:
+        return "趋势样本不足，暂不作研判。"
+    trend = "上升" if items[-1][1] >= items[0][1] else "回落"
+    return f"话题当前处于{trend}通道，监测节奏应与之匹配——升温期抢定调、回落期做沉淀。"
+
+
+def _sum_competitor(a):
+    if not a["competitors"]:
+        return "尚无竞品对标，叙事聚焦本品自身。"
+    c = a["competitors"][0]
+    return f"竞品叙事以 {c['name']} 为锚点，差异化卖点需针对性强化以抵消横向比较。"
+
+
+def _sum_risk(a):
+    if not a["signals"]:
+        return "风险面平静，保持常规监测即可。"
+    crit = [s for s in a["signals"] if s.get("severity") in ("critical", "high")]
+    if crit:
+        return f"存在 {len(crit)} 个严重/高风险信号，须立即进入优先处置队列。"
+    return f"风险以中低级别为主（共 {len(a['signals'])} 个），常态化监控即可。"
+
+
+def _interpret_methodology(a):
+    aud = _derive_strategy(a)["audience"]
+    return (f"上述方法论为本话题独立生成，随「{a['scenario']}」场景与关键词定制，区别于通用模板，可独立交付给 {aud} 使用。"
+            f"采集口径、分析维度与结论口径均围绕本话题目标设定，而非套用固定结构。")
+
+
+def _sum_methodology(a):
+    return "调研策略与报告呈现均本话题专属，可直接作为面向目标用户的独立交付物。"
+
+
+# ---- 章节片段数据 ----
+
+def _lead_overview(a):
+    if a["pos_ratio"] >= 0.6:
+        return f"整体情绪以正面为主（{a['pos_ratio']*100:.0f}%），讨论基调积极。"
+    if a["pos_ratio"] >= 0.45:
+        return f"正面 {a['pos_ratio']*100:.0f}% 与负面 {a['neg_ratio']*100:.0f}% 接近，舆论正负拉锯。"
+    return f"负面占比达 {a['neg_ratio']*100:.0f}%，情绪面承压。"
+
+
+def _vc_overview(a):
+    return {"cls": "info", "tag": "当前阶段", "title": PHASE_LABELS.get(a["last_phase"], a["last_phase"]),
+            "text": a["phase_forecast"]}
+
+
+def _vc_manip(a):
+    if a["manipulation_evidence"]:
+        return {"cls": "danger", "tag": "操纵/抹黑迹象", "title": f"检出 {len(a['manipulation_evidence'])} 条相关信号",
+                "text": "数据中发现与抹黑 / AI投毒 / 黑公关相关的风险信号，详见风险矩阵。"}
+    return {"cls": "good", "tag": "操纵/抹黑迹象", "title": "未检出明确操纵",
+            "text": "负面主要来自可识别的独立账号，未呈现组织化特征。"}
+
+
+def _vc_comp(a):
+    if a["competitors"]:
+        c = a["competitors"][0]
+        return {"cls": "info", "tag": "竞品对标焦点", "title": c["name"],
+                "text": f"最常被对比的对象（提及 {c['count']} 次），竞品叙事活跃。"}
+    return None
+
+
+def _condense_methodology(a):
+    m = (a.get("methodology") or "").strip()
+    lines = [ln.strip() for ln in m.split("\n") if ln.strip()]
+    goal = ""
+    for ln in lines:
+        if ln.startswith("**调研目标"):
+            goal = ln.split("**", 2)[-1].strip().lstrip("：:").strip()
+            break
+    if goal:
+        return (f"本话题采用独立生成的调研方法论：调研目标为「{goal.rstrip('。')}」。"
+                f"整套方法随「{a['scenario']}」场景与关键词定制，覆盖 {a['total']} 条原始数据的采集、清洗与多维分析，"
+                f"而非套用固定模板，确保结论口径与本次调研目标一致。")
+    return (f"本话题采用独立生成的调研方法论，随「{a['scenario']}」场景与关键词定制，"
+            f"覆盖 {a['total']} 条原始数据的采集、清洗与多维分析，结论口径与本次调研目标对齐。")
+
+
+def _interpret_negative(a):
+    base = f"负面条目共 {a['sent_dist'].get('negative', 0)} 条，来自 {a['neg_authors']} 个独立账号；"
+    if a["neg_concentration"] >= 0.5:
+        return (base + f"其中 {a['neg_peak'][0][5:]} 单日即集中了 {a['neg_concentration'] * 100:.0f}% 的负面声量。"
+                f"这种时间上的高度聚集，既可能是某次具体事件引爆，也提示存在组织化推动或水军节奏的可能性，"
+                f"应结合风险矩阵中的来源账号与传播证据进一步核实，避免误判为自然发酵。")
+    return (base + "负面在时间轴上分散、来自多个互不关联的独立账号，更接近用户自发的自然发酵。"
+            f"回应策略上以常态化答疑、口碑引导与产品体验改善为主即可，无需过度反应。")
+
+
+def _sum_negative(a):
+    if a["neg_concentration"] >= 0.5:
+        return "负面高度集中、疑似外部推动，建议优先溯源核实再决定回应强度。"
+    return "负面分散且自然，常规答疑与口碑引导即可覆盖。"
+
+
+def _concise_negative(a):
+    return _interpret_negative(a)
+
+
+def _aggregate_actions(a):
+    seen, acts = set(), []
+    for sig in sorted(a["signals"], key=lambda s: -TYPE_WEIGHTS.get(s.get("severity", "medium"), 3)):
+        act = (sig.get("recommended_action") or "").strip()
+        if act and act not in seen:
+            seen.add(act)
+            acts.append((SEVERITY_LABELS.get(sig.get("severity", "medium"), sig.get("severity")), act))
+    return acts
+
+
+def build_report_schema(a):
+    """Stage 2：从分析数据生成『报告样式 / 骨架』(schema)。
+
+    不做任何 HTML 渲染，只决定：
+      - 本章节编排（仅保留有数据 / 有信号的章节，满足「呈现独立」）
+      - 每个章节按「观察 → 解读 → 小结」组织内容块：
+          观察（图表 / 文字事实）→ 解读（数据意味着什么）→ 小结（一句结论落点）
+      - 每个图表一块，附 caption（解读）+ summary（小结），文字充分、可读性强
+      - 报告主色调随场景（满足「独立可交付给目标用户」）
+    """
+    strat = _derive_strategy(a)
+    schema = {
+        "topic_id": a["meta"]["topic_id"],
+        "topic": a["meta"]["topic"],
+        "scenario": a["scenario"],
+        "strategy": strat,
+        "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M"),
+        "sections": [],
+    }
+    charts = {}
+
+    # 0 调研策略（独立呈现，面向目标受众）
+    schema["sections"].append({
+        "id": "strategy", "title": "调研策略与目标受众",
+        "lead": f"本报告面向 {strat['audience']}；定位为{a['scenario']}，聚焦：{'、'.join(strat['emphasis'])}。",
+        "blocks": [
+            {"type": "prose", "text": _condense_methodology(a)},
+            {"type": "interpret", "text": _interpret_methodology(a)},
+            {"type": "summary", "text": _sum_methodology(a)},
+        ],
+    })
+
+    # 1 核心结论速览
+    cards = [c for c in (_vc_overview(a), _vc_manip(a), _vc_comp(a)) if c]
+    schema["sections"].append({
+        "id": "overview", "title": "核心结论速览",
+        "lead": _lead_overview(a),
+        "blocks": [
+            {"type": "verdict_cards", "cards": cards},
+            {"type": "interpret", "text": _interpret_overview(a)},
+            {"type": "summary", "text": _sum_overview(a)},
+        ],
+    })
+
+    # 2 调研数据基础：每个图表按「观察(图) → 解读 → 小结」
+    blocks = []
+    sent_items = [(SENT_LABELS[s], a["sent_dist"].get(s, 0))
+                  for s in ["positive", "neutral", "negative", "mixed"] if a["sent_dist"].get(s, 0) > 0]
+    if sent_items:
+        cid = "chart-sent"; charts[cid] = _doughnut_option(sent_items, f"共 {a['total']} 条")
+        blocks.append({"type": "chart", "chart_id": cid, "caption": _interpret_sentiment(a),
+                       "summary": _sum_sentiment(a), "height": 260})
+    plat_items = [(PLAT_LABELS.get(p, p), n) for p, n in a["plat_dist"].most_common(8)]
+    if plat_items:
+        cid = "chart-plat"; charts[cid] = _hbar_option(plat_items)
+        blocks.append({"type": "chart", "chart_id": cid, "caption": _interpret_platform(a),
+                       "summary": _sum_platform(a), "height": min(60 + 30 * len(plat_items), 340)})
+    daily = sorted(a["daily_dist"].items())
+    if len(daily) >= 2:
+        cid = "chart-daily"; charts[cid] = _line_option([d[5:] for d, _ in daily], [c for _, c in daily])
+        blocks.append({"type": "chart", "chart_id": cid, "caption": _interpret_daily(a),
+                       "summary": _sum_daily(a), "height": 260})
+    if a["competitors"]:
+        comps = a["competitors"][:10]
+        cid = "chart-competitor"; charts[cid] = _hbar_option([(c["name"], c["count"]) for c in comps])
+        blocks.append({"type": "chart", "chart_id": cid, "caption": _interpret_competitor(a),
+                       "summary": _sum_competitor(a), "height": min(60 + 32 * len(comps), 340)})
+    if blocks:
+        schema["sections"].append({
+            "id": "data", "title": "调研数据基础",
+            "lead": "以下图表刻画情绪结构、渠道分布与发酵曲线；每个图表先给出数据观察，再行解读，最后落到一句小结。",
+            "blocks": blocks,
+        })
+
+    # 3 负面情绪与风险焦点：观察 → 解读 → 小结
+    if a["neg_entries"]:
+        schema["sections"].append({
+            "id": "negative", "title": "负面情绪与风险焦点",
+            "lead": f"负面占比 {a['neg_ratio']*100:.0f}%，核心争议点如下。",
+            "blocks": [
+                {"type": "prose", "text": _prose_negative(a)},
+                {"type": "interpret", "text": _interpret_negative(a)},
+                {"type": "summary", "text": _sum_negative(a)},
+            ],
+        })
+
+    # 4 风险矩阵与预警
+    if a["signals"]:
+        schema["sections"].append({
+            "id": "risk", "title": "风险矩阵与预警",
+            "lead": _interpret_risk(a),
+            "blocks": [
+                {"type": "signals", "signals": a["signals"]},
+                {"type": "interpret", "text": _interpret_risk_detail(a)},
+                {"type": "summary", "text": _sum_risk(a)},
+            ],
+        })
+
+    # 5 预测研判
+    schema["sections"].append({
+        "id": "forecast", "title": "预测研判",
+        "lead": a["phase_forecast"],
+        "blocks": [
+            {"type": "prose", "text": _prose_forecast(a)},
+            {"type": "interpret", "text": _interpret_forecast(a)},
+            {"type": "summary", "text": _sum_forecast(a)},
+        ],
+    })
+
+    # 6 行动建议
+    acts = _aggregate_actions(a)
+    if acts:
+        schema["sections"].append({
+            "id": "actions", "title": "行动建议（按优先级）",
+            "lead": "按信号严重度聚合的处置建议，P0 优先；每条建议均可直接落地。",
+            "blocks": [
+                {"type": "actions", "actions": acts},
+                {"type": "summary", "text": _sum_actions(a)},
+            ],
+        })
+
+    # 金融单品追踪：在通用章节之上叠加金融专属章节（单品基本面/势能/热品排名/股价背离/催化剂/机会评分）
+    if a["scenario"] == "金融单品追踪" and a.get("finance") and not a["finance"].get("error"):
+        schema["sections"].extend(_finance_sections(a, charts))
+
+    schema["charts"] = charts
+    return schema
+
+
+# ============================================================
+# 金融单品追踪专属章节（观察 → 解读 → 小结，无边框）
+# ============================================================
+def _finance_sections(a, charts):
+    fin = a["finance"]
+    fin_meta = a.get("financial") or {}
+    opp = fin.get("opportunity", {}) or {}
+    sections = []
+
+    # 单品基本面
+    basic_lines = []
+    for label, key in [("公司", "company"), ("股票代码", "ticker"), ("单品", "product"),
+                       ("业务线", "product_line"), ("追踪类型", "watch_type"),
+                       ("上市/交付日", "launch_date"), ("价格带", "price_band")]:
+        v = fin_meta.get(key)
+        if v:
+            basic_lines.append(f"**{label}**：{v}")
+    if basic_lines:
+        sections.append({
+            "id": "fin_basic", "title": "单品基本面",
+            "lead": f"追踪标的：{fin_meta.get('company','')} 的「{fin_meta.get('product','')}」"
+                    f"{('（'+fin_meta.get('ticker','')+'）') if fin_meta.get('ticker') else ''}。",
+            "blocks": [
+                {"type": "prose", "text": "；".join(basic_lines) + "。"},
+                {"type": "interpret", "text": _interpret_fin_basic(a)},
+                {"type": "summary", "text": _sum_fin_basic(a)},
+            ],
+        })
+
+    # 单品势能与健康度
+    heat = fin.get("heat", 0)
+    h = fin.get("health", {})
+    cid = "chart-fin-heat"
+    # 用一张雷达展示热度分项（charts 为 build_report_schema 传入的同一对象）
+    bd = fin.get("heat_breakdown", {})
+    if bd:
+        sections.append({
+            "id": "fin_health", "title": "单品势能与健康度",
+            "lead": f"综合热度分 **{heat}**／100；情绪净分 {h.get('net_sentiment',0):+.2f}，声量动量 {h.get('momentum',0):+.2f}。",
+            "blocks": [
+                {"type": "chart", "chart_id": cid,
+                 "caption": _interpret_fin_health(a), "summary": _sum_fin_health(a), "height": 260},
+            ],
+        })
+        charts[cid] = _radar_option(
+            [("声量动量", bd.get("momentum_score", 0)), ("情绪净分", bd.get("sentiment_score", 0)),
+             ("互动量", bd.get("engagement_score", 0)), ("渠道广度", bd.get("breadth_score", 0))],
+            title=f"热度分项 · {heat}")
+
+    # 同公司热品排名
+    company = fin_meta.get("company")
+    if company:
+        try:
+            ranked = finance_analysis.rank_hot_products(company)
+        except Exception:
+            ranked = []
+        if len(ranked) > 1:
+            rows = [f"第{r['rank']}名 {r['product']}（热度 {r['heat']}，情绪 {r['net_sentiment']:+.2f}）" for r in ranked]
+            sections.append({
+                "id": "fin_hotrank", "title": f"同公司热品排名（{company}）",
+                "lead": f"在 {company} 的 {len(ranked)} 个追踪单品中，「{fin_meta.get('product','')}」位列第 {_my_rank(ranked, a['meta']['topic_id'])}。",
+                "blocks": [
+                    {"type": "prose", "text": "；".join(rows) + "。"},
+                    {"type": "interpret", "text": _interpret_fin_hotrank(a, ranked, company)},
+                    {"type": "summary", "text": _sum_fin_hotrank(a, ranked, company)},
+                ],
+            })
+
+    # 股价背离
+    dis = opp.get("dislocation", {}) or {}
+    sections.append({
+        "id": "fin_dislocation", "title": "股价背离度",
+        "lead": dis.get("signal", "数据不足"),
+        "blocks": [
+            {"type": "prose", "text": _prose_fin_dislocation(a)},
+            {"type": "interpret", "text": _interpret_fin_dislocation(a)},
+            {"type": "summary", "text": _sum_fin_dislocation(a)},
+        ],
+    })
+
+    # 催化剂日历
+    catalysts = opp.get("catalysts", []) or []
+    if catalysts:
+        cat_lines = [f"{c.get('date','')} · {c.get('type','')}：{c.get('note','')}" for c in catalysts]
+        sections.append({
+            "id": "fin_catalyst", "title": "催化剂日历",
+            "lead": f"识别到 {len(catalysts)} 个潜在催化剂事件。",
+            "blocks": [
+                {"type": "prose", "text": "；".join(cat_lines) + "。"},
+                {"type": "interpret", "text": _interpret_fin_catalyst(a)},
+                {"type": "summary", "text": _sum_fin_catalyst(a)},
+            ],
+        })
+
+    # 交易机会评分（核心章节）
+    sections.append({
+        "id": "fin_opportunity", "title": "交易机会评分",
+        "lead": f"机会评分 **{opp.get('score',0)}**／100，方向 **{opp.get('direction','观望')}**，置信度 {opp.get('confidence','低')}。",
+        "blocks": [
+            {"type": "verdict_cards", "cards": _opp_cards(opp)},
+            {"type": "interpret", "text": _interpret_fin_opportunity(a)},
+            {"type": "summary", "text": _sum_fin_opportunity(a)},
+        ],
+    })
+    return sections
+
+
+def _my_rank(ranked, topic_id):
+    for r in ranked:
+        if r["topic_id"] == topic_id:
+            return r["rank"]
+    return "-"
+
+
+def _opp_cards(opp):
+    direction = opp.get("direction", "观望")
+    if direction == "看多":
+        dcls = "good"
+    elif direction == "看空":
+        dcls = "danger"
+    else:
+        dcls = "info"
+    cards = [
+        {"cls": dcls, "tag": "机会评分", "title": f"{opp.get('score',0)}/100", "text": f"方向 {direction}，置信度 {opp.get('confidence','低')}"},
+        {"cls": dcls, "tag": "方向", "title": direction, "text": "由单品势能、股价背离与催化剂共振得出"},
+        {"cls": "info", "tag": "信号强度", "title": f"{opp.get('signal_score',0)}", "text": "单品社媒势能分"},
+        {"cls": "info", "tag": "股价背离分", "title": f"{opp.get('dislocation_score',0)}", "text": opp.get("dislocation", {}).get("signal", "数据不足")},
+        {"cls": "info", "tag": "催化剂分", "title": f"{opp.get('catalyst_score',0)}", "text": f"{len(opp.get('catalysts', []) or [])} 个催化剂事件"},
+        {"cls": "warn", "tag": "数据缺口", "title": f"{len(opp.get('data_gaps', []) or [])} 项", "text": "、".join(opp.get("data_gaps", []) or ["无"]) or "无"},
+    ]
+    return cards
+
+
+def _interpret_fin_basic(a):
+    fin = a.get("financial") or {}
+    return (f"本标的为 {fin.get('company','')} 旗下单品「{fin.get('product','')}」"
+            f"{('（'+fin.get('ticker','')+'）') if fin.get('ticker') else ''}，属 {fin.get('product_line','')} 业务线。"
+            f"将其作为独立标的追踪，意义在于把『单品势能』从公司整体叙事中剥离出来——单品往往比母公司更早反映预期差，是发现交易线索的更敏锐切面。")
+
+
+def _sum_fin_basic(a):
+    return "以单品为最小追踪单元，可更早捕捉母公司层面的预期差。"
+
+
+def _interpret_fin_health(a):
+    fin = a["finance"]
+    h = fin.get("health", {})
+    return (f"综合热度分 {fin.get('heat',0)}／100，由声量动量、情绪净分、互动量与渠道广度四项加权得出。"
+            f"当前情绪净分 {h.get('net_sentiment',0):+.2f}、声量动量 {h.get('momentum',0):+.2f}——"
+            f"{'势能处于升温通道，关注能否转化为持续热度' if h.get('momentum',0) > 0.15 else ('势能偏弱或见顶，需警惕热度回落' if h.get('momentum',0) < -0.15 else '势能平稳，维持常规节奏')}。")
+
+
+def _sum_fin_health(a):
+    h = a["finance"].get("health", {})
+    if h.get("momentum", 0) > 0.15:
+        return "单品势能升温，是后续机会判断的正向基础。"
+    if h.get("momentum", 0) < -0.15:
+        return "单品势能走弱，机会需等待拐点。"
+    return "势能平稳，暂无明显拐点信号。"
+
+
+def _interpret_fin_hotrank(a, ranked, company):
+    me = _my_rank(ranked, a["meta"]["topic_id"])
+    top = ranked[0] if ranked else None
+    if top and top["topic_id"] == a["meta"]["topic_id"]:
+        return (f"在 {company} 的 {len(ranked)} 个追踪单品中，「{a['financial'].get('product','')}」热度居首，"
+                f"说明它当前是该公司最受市场关注的产品，资金与讨论的注意力集中于此，往往也是预期差最易产生之处。")
+    return (f"在 {company} 的 {len(ranked)} 个追踪单品中，「{a['financial'].get('product','')}」排名第 {me}，"
+            f"榜首为「{top['product'] if top else ''}」（热度 {top['heat'] if top else 0}）。"
+            f"热品内部的相对位次，可提示资源与预期在矩阵内的转移方向——资金可能正从本品流向更热的兄弟产品，或反之。")
+
+
+def _sum_fin_hotrank(a, ranked, company):
+    me = _my_rank(ranked, a["meta"]["topic_id"])
+    if ranked and ranked[0]["topic_id"] == a["meta"]["topic_id"]:
+        return f"本品为 {company} 当前热品榜首，市场注意力集中。"
+    return f"本品在 {company} 矩阵中排名第 {me}，关注热度相对位移。"
+
+
+def _prose_fin_dislocation(a):
+    opp = a["finance"].get("opportunity", {}) or {}
+    dis = opp.get("dislocation", {}) or {}
+    pc = dis.get("price_change_pct")
+    if pc is None:
+        return "未采集到该标的股价区间涨跌幅，无法计算背离度；以下仅基于社媒势能给出方向性提示。"
+    return (f"监测窗口内股价区间涨跌幅 {pc}%，同期单品声量动量 {dis.get('momentum',0):+.2f}。"
+            f"背离判断：{dis.get('signal','数据不足')}。")
+
+
+def _interpret_fin_dislocation(a):
+    opp = a["finance"].get("opportunity", {}) or {}
+    dis = opp.get("dislocation", {}) or {}
+    if dis.get("price_change_pct") is None:
+        return "缺少股价数据，背离度无法量化。建议补采东方财富/雪球区间涨跌幅后重算——这是把『社媒线索』升级为『交易机会』的关键一步。"
+    sig = dis.get("signal", "")
+    if sig.startswith("正向错配"):
+        return ("出现正向错配：单品势能走强但股价未跟上，往往意味着市场预期尚未定价该单品的改善，"
+                "存在被低估的可能。这是最有效的机会信号之一，但需用交付/销量数据验证势能能否兑现为收入。")
+    if sig.startswith("反向错配"):
+        return ("出现反向错配：单品走弱而股价走强，警惕『利好出尽』——股价已提前反映乐观预期，"
+                "而基本面线索正在转弱，回调风险上升。")
+    return "单品与股价方向一致或无明显背离，趋势处于确认/平稳状态，机会更多来自势能的边际加速而非错配。"
+
+
+def _sum_fin_dislocation(a):
+    opp = a["finance"].get("opportunity", {}) or {}
+    dis = opp.get("dislocation", {}) or {}
+    if dis.get("price_change_pct") is None:
+        return "背离度待补股价数据后计算。"
+    if dis.get("signal", "").startswith("正向错配"):
+        return "正向错配＝潜在低估信号，待交付数据验证。"
+    if dis.get("signal", "").startswith("反向错配"):
+        return "反向错配＝利好出尽风险，需防回调。"
+    return "无明显背离，趋势平稳。"
+
+
+def _interpret_fin_catalyst(a):
+    opp = a["finance"].get("opportunity", {}) or {}
+    cats = opp.get("catalysts", []) or []
+    types = "、".join(c.get("type", "") for c in cats)
+    return (f"识别到 {len(cats)} 个催化剂（{types}）。催化剂是单品势能向股价传导的『触发器』——"
+            f"发布、交付、财报、大单等节点临近时，市场预期会重新定价，机会窗口通常在事件前 1-2 周打开、事件后收敛。"
+            f"应把催化剂日历作为加减速的观察锚点，而非孤立事件。")
+
+
+def _sum_fin_catalyst(a):
+    opp = a["finance"].get("opportunity", {}) or {}
+    n = len(opp.get("catalysts", []) or [])
+    return f"共 {n} 个催化剂，作为机会窗口的时序锚点。"
+
+
+def _interpret_fin_opportunity(a):
+    opp = a["finance"].get("opportunity", {}) or {}
+    d = opp.get("direction", "观望")
+    score = opp.get("score", 0)
+    gaps = opp.get("data_gaps", []) or []
+    if gaps:
+        return (f"综合信号强度、股价背离与催化剂密度，机会评分为 {score}／100，方向 **{d}**，置信度 {opp.get('confidence','低')}。"
+                f"需说明：当前存在数据缺口（{'、'.join(gaps)}），因此本评分更宜作为『线索』而非『结论』，"
+                f"补齐全金融面数据后结论会更硬。触发条件与风险见下方。")
+    return (f"金融面数据齐备，机会评分 {score}／100，方向 **{d}**，置信度 {opp.get('confidence','中')}。"
+            f"评分由信号强度（权重 0.4）、股价背离（0.35）、催化剂密度（0.25）合成；"
+            f"触发条件与风险见下方，建议据此设定观察与执行节奏。")
+
+
+def _sum_fin_opportunity(a):
+    opp = a["finance"].get("opportunity", {}) or {}
+    d = opp.get("direction", "观望")
+    if d == "看多":
+        return "势能+背离+催化剂共振偏多，按触发条件分批观察建仓。"
+    if d == "看空":
+        return "反向信号偏空，以防守/减仓观察为主。"
+    return "信号尚未形成明确方向，维持观望、等待拐点。"
+
+
+# ---- 观察(正文事实) / 解读(意味着什么) / 小结(结论落点) 的辅助文本 ----
+
+def _lead_overview(a):
+    if a["pos_ratio"] >= 0.6:
+        return f"整体情绪以正面为主（{a['pos_ratio']*100:.0f}%），讨论基调积极。"
+    if a["pos_ratio"] >= 0.45:
+        return f"正面 {a['pos_ratio']*100:.0f}% 与负面 {a['neg_ratio']*100:.0f}% 接近，舆论正负拉锯。"
+    return f"负面占比达 {a['neg_ratio']*100:.0f}%，情绪面承压。"
+
+
+def _interpret_overview(a):
+    if a["pos_ratio"] >= 0.6:
+        return (f"三项速览共同指向一个结论：话题整体处于健康区间。当前阶段为「{PHASE_LABELS.get(a['last_phase'], a['last_phase'])}」，"
+                f"叙事主导权与口碑基本在品牌方可控范围内，但需持续盯防竞品借势与偶发负面事件。")
+    if a["pos_ratio"] >= 0.45:
+        return (f"速览显示话题已进入「{PHASE_LABELS.get(a['last_phase'], a['last_phase'])}」，正负力量接近，"
+                f"任何一方的增量都可能改变态势。此时最忌被动，应主动设置议题、把讨论拉回品牌想讲的故事。")
+    return (f"速览显示话题处于「{PHASE_LABELS.get(a['last_phase'], a['last_phase'])}」，情绪承压，"
+            f"且{'检出操纵/抹黑迹象' if a['manipulation_evidence'] else '负面以自然发酵为主'}。"
+            f"这一阶段的核心是止血与溯源，优先把风险信号对应的动作跑起来。")
+
+
+def _sum_overview(a):
+    if a["pos_ratio"] >= 0.6:
+        return "整体可控、基调积极，维持正向运营并防竞品借势即可。"
+    if a["pos_ratio"] >= 0.45:
+        return "态势胶着，主动设置议题、防止负面反超是当下重点。"
+    return "情绪承压，止血溯源与风险处置应优先于常规运营。"
+
+
+def _prose_negative(a):
+    neg_n = a["sent_dist"].get("negative", 0)
+    lines = [f"本话题共采集 {a['total']} 条数据，其中负面 {neg_n} 条（{a['neg_ratio']*100:.0f}%），"
+             f"来自 {a['neg_authors']} 个不同账号。"]
+    if a["manipulation_evidence"]:
+        lines.append(f"风险类信号中检出 {len(a['manipulation_evidence'])} 条与抹黑 / AI投毒 / 黑公关相关的痕迹，"
+                     f"提示部分负面可能并非纯自发，需结合来源账号进一步核实。")
+    top_kw = "、".join(a["top_keywords"][:5]) if a.get("top_keywords") else ""
+    if top_kw:
+        lines.append(f"负面讨论的高频词集中在：{top_kw}，可据此定位争议的具体切入点。")
+    return "".join(lines)
+
+
+def _interpret_risk_detail(a):
+    if not a["signals"]:
+        return "未触发风险信号，维持常态监控。"
+    crit = [s for s in a["signals"] if s.get("severity") in ("critical", "high")]
+    if crit:
+        names = "、".join(TYPE_LABELS.get(s.get("type", ""), s.get("type", "")) for s in crit[:3])
+        return (f"其中 {len(crit)} 个严重/高风险信号是当下最该盯的对象，类型涉及 {names}。"
+                f"这些信号的共同特征是传播速度快、影响面大，一旦处置滞后就可能外溢为公关事件，"
+                f"因此建议进入专项跟进而非并入日常队列。")
+    return (f"{len(a['signals'])} 个信号级别以中低为主，短期外溢风险可控，"
+            f"但仍建议纳入周度复盘，防止低级别信号在外部催化下升级。")
+
+
+def _prose_forecast(a):
+    return (f"基于发酵曲线的阶段判定，话题当前处于「{PHASE_LABELS.get(a['last_phase'], a['last_phase'])}」。"
+            f"{a['phase_forecast']}。演变路径并非线性，外部事件（如新品、舆情、竞品动作）可随时改写曲线。")
+
+
+def _interpret_forecast(a):
+    if a["last_phase"] in ("emergence", "growth"):
+        return "升温阶段的关键动作是抢在峰值前完成信息定调与口碑预埋，避免被负面抢先定义话题。"
+    if a["last_phase"] == "peak":
+        return "峰值之后声量必然回落，真正的价值在长尾：把高峰期的关注转化为可沉淀的口碑与转化内容。"
+    if a["last_phase"] == "decline":
+        return "衰退期不宜再大量投放声量，应把预算与注意力转向高意向用户的深度决策内容。"
+    return "平稳期无需额外刺激，保持常规监测节奏、积累基线数据即可。"
+
+
+def _sum_forecast(a):
+    if a["last_phase"] in ("emergence", "growth"):
+        return "处于升温通道，当下重点是前瞻定调、抢在峰值前布局。"
+    if a["last_phase"] == "peak":
+        return "已至峰值，重心转向长尾沉淀与转化。"
+    if a["last_phase"] == "decline":
+        return "进入衰退，聚焦高意向用户的深度转化。"
+    return "平稳期，维持常规监测即可。"
+
+
+def _sum_actions(a):
+    if not a["signals"]:
+        return "暂无需要落地的高优先级动作。"
+    crit = [s for s in a["signals"] if s.get("severity") in ("critical", "high")]
+    if crit:
+        return f"优先处置 {len(crit)} 个严重/高风险对应的动作，其余按 P1/P2 排入常规跟进。"
+    return f"共 {len(a['signals'])} 条建议，按 P0/P1/P2 优先级排入跟进即可。"
 
 
 # ============================================================
@@ -353,38 +1070,42 @@ def analyze_topic(topic_id):
 # ============================================================
 
 REPORT_CSS = """*{margin:0;padding:0;box-sizing:border-box}
+/* 报告视觉规范：全屏铺满呈现、去装饰性边框/渐变/阴影，用淡背景与功能性左侧色条区分信息层级 */
 :root{--bg:#0a0e17;--panel:#101828;--panel2:#141d33;--border:#1d2943;--text:#e6ecf7;--text2:#8b9bc0;--accent:#5b8cff;--pos:#34d399;--neg:#fb7185;--mid:#fbbf24;--mix:#a78bfa;--mono:'SF Mono','JetBrains Mono',ui-monospace,Menlo,Consolas,monospace}
 body{background:var(--bg);color:var(--text);font-family:'SF Pro Display','PingFang SC','Hiragino Sans GB','Microsoft YaHei',system-ui,sans-serif;line-height:1.75;font-size:15px}
-.container{max-width:1100px;margin:0 auto;padding:0 24px 60px}
-.header{background:linear-gradient(135deg,#111a30,#0a1120);border-bottom:1px solid var(--border);padding:44px 0 30px;margin-bottom:36px}
-.header .inner{max-width:1100px;margin:0 auto;padding:0 24px}
+/* 全屏：去居中窄栏，铺满容器 */
+.container{margin:0;padding:0 44px 56px}
+.header{padding:40px 0 28px;margin-bottom:32px;border-bottom:1px solid var(--border)}
+.header .inner{margin:0;padding:0 44px}
 .header .eyebrow{font-family:var(--mono);font-size:10px;color:var(--accent);letter-spacing:2px;margin-bottom:10px}
 .header h1{font-size:30px;font-weight:800;margin-bottom:10px;letter-spacing:.5px}
 .header .sub{color:var(--text2);font-size:14px;margin-bottom:18px}
-.meta-grid{display:flex;flex-wrap:wrap;gap:10px}
-.meta-chip{background:var(--panel2);border:1px solid var(--border);border-radius:6px;padding:7px 14px;font-size:12.5px;color:var(--text2)}
+.meta-grid{display:flex;flex-wrap:wrap;gap:8px}
+.meta-chip{background:var(--panel2);border-radius:6px;padding:6px 12px;font-size:12.5px;color:var(--text2)}
 .meta-chip b{color:var(--text);font-family:var(--mono);font-variant-numeric:tabular-nums;font-weight:600}
-h2.sec{font-size:22px;font-weight:800;margin:44px 0 20px;padding-bottom:12px;border-bottom:1px solid var(--border)}
+h2.sec{font-size:22px;font-weight:800;margin:42px 0 18px;padding-bottom:10px;border-bottom:1px solid var(--border)}
 h2.sec .num{display:inline-block;background:var(--accent);color:#fff;border-radius:5px;padding:2px 10px;font-size:13px;margin-right:10px;vertical-align:3px;font-family:var(--mono)}
 h3{font-size:16px;color:var(--accent);margin:22px 0 10px}
 p{margin-bottom:12px}
-.card{background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:20px 22px;margin-bottom:16px}
+/* 卡片：淡背景区分，无外边框 */
+.card{background:var(--panel2);border-radius:8px;padding:18px 20px;margin-bottom:14px}
 .card-title{font-size:15px;font-weight:700;margin-bottom:10px;display:flex;align-items:center;gap:8px}
 .tag{font-size:11px;padding:2px 8px;border-radius:4px;font-weight:600}
 .tag-info{background:rgba(91,140,255,.15);color:var(--accent)}
 .tag-pos{background:rgba(52,211,153,.15);color:var(--pos)}
 .tag-neg{background:rgba(251,113,133,.15);color:var(--neg)}
 .tag-mid{background:rgba(251,191,36,.15);color:var(--mid)}
-.verdict{background:linear-gradient(135deg,rgba(91,140,255,.08),rgba(52,211,153,.06));border:1px solid var(--accent);border-left:4px solid var(--accent);border-radius:10px;padding:16px 20px;margin:14px 0}
-.verdict.red{border-color:var(--neg);border-left-color:var(--neg);background:linear-gradient(135deg,rgba(251,113,133,.08),rgba(251,113,133,.03))}
+/* 结论块：仅保留左侧 accent 色条作为信息锚点，去渐变/外边框 */
+.verdict{background:rgba(91,140,255,.05);border-radius:6px;padding:14px 18px;margin:14px 0}
+.verdict.red{background:rgba(251,113,133,.06)}
 /* 核心结论速览（执行摘要式） */
-.brief{position:relative;background:linear-gradient(135deg,rgba(91,140,255,.08),rgba(91,140,255,.015));border:1px solid var(--border);border-left:4px solid var(--accent);border-radius:10px;padding:20px 22px;margin:14px 0}
-.brief.good{border-left-color:var(--pos)}
-.brief.warn{border-left-color:var(--mid)}
-.brief.danger{border-left-color:var(--neg)}
+.brief{background:rgba(91,140,255,.05);border-radius:6px;padding:18px 20px;margin:14px 0}
+.brief.good{}
+.brief.warn{}
+.brief.danger{}
 .brief .brief-lead{font-size:16.5px;font-weight:600;line-height:1.9;color:var(--text)}
 .brief .brief-meta{margin-top:10px;font-size:11.5px;color:var(--text2);font-family:var(--mono);letter-spacing:.3px}
-.kpi-strip{display:grid;grid-template-columns:repeat(auto-fit,minmax(116px,1fr));gap:1px;background:var(--border);border:1px solid var(--border);border-radius:10px;overflow:hidden;margin:14px 0}
+.kpi-strip{display:grid;grid-template-columns:repeat(auto-fit,minmax(116px,1fr));gap:1px;background:var(--border);border-radius:8px;overflow:hidden;margin:14px 0}
 @media(max-width:640px){.kpi-strip{grid-template-columns:repeat(2,1fr)}}
 .kpi-item{background:var(--panel2);padding:14px 12px;text-align:center}
 .kpi-item .kpi-val{display:block;font-family:var(--mono);font-variant-numeric:tabular-nums;font-size:23px;font-weight:800;line-height:1.15;letter-spacing:-.5px;white-space:nowrap}
@@ -396,7 +1117,8 @@ p{margin-bottom:12px}
 .kpi-item .kpi-lbl{display:block;font-size:10.5px;color:var(--text2);margin-top:5px;letter-spacing:.6px}
 .verdict-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:14px 0}
 @media(max-width:640px){.verdict-grid{grid-template-columns:1fr}}
-.vc{position:relative;background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:14px 16px;overflow:hidden}
+/* 信号卡：淡背景 + 左侧细色条，无外边框 */
+.vc{position:relative;background:var(--panel2);border-radius:8px;padding:14px 16px;overflow:hidden}
 .vc::before{content:'';position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--text2)}
 .vc.vc-good::before{background:var(--pos)}
 .vc.vc-warn::before{background:var(--mid)}
@@ -404,20 +1126,20 @@ p{margin-bottom:12px}
 .vc.vc-info::before{background:var(--accent)}
 .vc .vc-head{display:flex;align-items:center;gap:8px;margin-bottom:8px}
 .vc .vc-tick{width:7px;height:7px;border-radius:50%;background:var(--text2);flex-shrink:0}
-.vc.vc-good .vc-tick{background:var(--pos);box-shadow:0 0 6px rgba(52,211,153,.6)}
-.vc.vc-warn .vc-tick{background:var(--mid);box-shadow:0 0 6px rgba(251,191,36,.6)}
-.vc.vc-danger .vc-tick{background:var(--neg);box-shadow:0 0 6px rgba(251,113,133,.6)}
-.vc.vc-info .vc-tick{background:var(--accent);box-shadow:0 0 6px rgba(91,140,255,.6)}
+.vc.vc-good .vc-tick{background:var(--pos)}
+.vc.vc-warn .vc-tick{background:var(--mid)}
+.vc.vc-danger .vc-tick{background:var(--neg)}
+.vc.vc-info .vc-tick{background:var(--accent)}
 .vc .vc-tag{font-size:9.5px;font-weight:800;letter-spacing:1px;color:var(--text2);text-transform:uppercase}
 .vc .vc-title{font-size:13.5px;font-weight:700;color:var(--text);margin-bottom:4px;line-height:1.6}
 .vc .vc-text{font-size:12.5px;line-height:1.75;color:var(--text2)}
 .vc .vc-text b{color:var(--text)}
 table{width:100%;border-collapse:collapse;margin:12px 0 18px;font-size:13px}
-th{background:var(--panel2);color:var(--text);text-align:left;padding:9px 12px;border:1px solid var(--border);font-weight:600}
-td{padding:9px 12px;border:1px solid var(--border);color:var(--text2);vertical-align:top}
+th{background:var(--panel2);color:var(--text);text-align:left;padding:9px 12px;font-weight:600}
+td{padding:9px 12px;color:var(--text2);vertical-align:top;border-top:1px solid var(--border)}
 td b{color:var(--text)}
-.kpi-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin:14px 0}
-.kpi{background:var(--panel2);border:1px solid var(--border);border-radius:10px;padding:14px;text-align:center}
+.kpi-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin:14px 0}
+.kpi{background:var(--panel2);border-radius:8px;padding:14px;text-align:center}
 .kpi .val{font-size:22px;font-weight:700;color:var(--accent);font-family:var(--mono);font-variant-numeric:tabular-nums;letter-spacing:-.5px}
 .kpi .val.warn{color:var(--neg)}
 .kpi .val.ok{color:var(--pos)}
@@ -437,11 +1159,11 @@ td b{color:var(--text)}
 .tl-title{font-weight:700;margin-bottom:3px}
 .tl-body{color:var(--text2);font-size:13px}
 .evo-phase{display:inline-block;padding:1px 8px;border-radius:4px;font-size:10px;font-weight:700;margin-right:8px;background:var(--panel2);color:var(--accent)}
-.signal{padding:10px 14px;border-left:3px solid;border-bottom:1px solid var(--border);font-size:12px;border-radius:0 6px 0 0}
-.signal-red{border-left-color:var(--neg);background:rgba(251,113,133,.04)}
-.signal-orange{border-left-color:var(--mid);background:rgba(251,191,36,.03)}
-.signal-yellow{border-left-color:var(--mid);background:rgba(251,191,36,.02)}
-.signal-green{border-left-color:var(--pos);background:rgba(52,211,153,.02)}
+.signal{padding:10px 14px;font-size:12px}
+.signal-red{background:rgba(251,113,133,.04)}
+.signal-orange{background:rgba(251,191,36,.03)}
+.signal-yellow{background:rgba(251,191,36,.02)}
+.signal-green{background:rgba(52,211,153,.02)}
 .signal-badge{font-size:9px;font-weight:800;padding:2px 8px;border-radius:4px;background:var(--panel2);color:var(--text);letter-spacing:.5px}
 .signal-type{font-size:10px;color:var(--text2);margin-left:8px;font-family:var(--mono)}
 .signal-desc{color:var(--text);line-height:1.6;margin-top:4px}
@@ -453,20 +1175,43 @@ td b{color:var(--text)}
 .sent-neg{background:rgba(251,113,133,.15);color:var(--neg)}
 .sent-mid{background:rgba(251,191,36,.15);color:var(--mid)}
 .sent-mix{background:rgba(167,139,250,.15);color:var(--mix)}
-blockquote{border-left:3px solid var(--accent);background:var(--panel2);padding:12px 16px;margin:12px 0;border-radius:0 8px 8px 0;color:var(--text2)}
+blockquote{font-size:14px;line-height:1.9;color:var(--text2);padding-left:14px;margin:12px 0}
 ul,ol{padding-left:22px;margin-bottom:12px}
 li{margin:5px 0;color:var(--text2)}
 li b{color:var(--text)}
 .note{font-size:12.5px;color:var(--text2);background:var(--panel2);border-radius:8px;padding:10px 14px;margin:12px 0}
 .footer{margin-top:50px;padding-top:20px;border-top:1px solid var(--border);color:var(--text2);font-size:12.5px;text-align:center;font-family:var(--mono)}
 .echart-box{width:100%;margin:12px 0 4px}
+/* 章节导语：纯文字，无边框盒修饰 */
+.sec-lead{color:var(--text2);font-size:15px;line-height:1.9;margin-bottom:16px;font-weight:500}
+/* 正文段落 / 解读 / 小结：纯文字流，用 label 区分，无任何边框或背景盒 */
+.prose{font-size:14.5px;line-height:1.95;color:var(--text);margin:10px 0 16px}
+.sec-interpret{font-size:14.5px;line-height:1.95;color:var(--text);margin:10px 0}
+.sec-interpret .lab,.sec-summary .lab,.chart-interpret .lab,.chart-summary .lab{color:var(--accent);font-weight:700;margin-right:6px}
+.sec-summary{font-size:14.5px;line-height:1.95;color:var(--text);font-weight:600;margin:6px 0 18px}
+/* 图表解读与小结：纯文字，无边框 */
+.chart-interpret{font-size:13.5px;line-height:1.85;color:var(--text);margin:8px 0 2px}
+.chart-summary{font-size:13.5px;line-height:1.85;color:var(--text);font-weight:600;margin:2px 0 18px}
+/* 核心结论速览 / 风险信号：纯文字行，彩色标签区分，无边框盒 */
+.vc-line{font-size:14px;line-height:1.9;color:var(--text);margin:8px 0}
+.vc-lab{font-weight:700;margin-right:8px;font-size:12.5px;letter-spacing:.3px}
+.sig-line{font-size:13.5px;line-height:1.85;color:var(--text);margin:12px 0}
+.sig-sev{font-weight:700;margin-right:6px}
+.sig-act{color:var(--text2);font-size:12.5px}
+table.acts{width:100%;border-collapse:collapse;margin:12px 0 4px;font-size:13.5px}
+table.acts th{background:var(--panel2);color:var(--text);text-align:left;padding:9px 12px;font-weight:600}
+table.acts td{padding:9px 12px;color:var(--text2);vertical-align:top}
+table.acts td b{color:var(--text)}
+.chart-interpret b{color:var(--text)}
 .src{display:block;font-size:12px;color:var(--text2);margin-top:6px}
-code{background:var(--panel2);border:1px solid var(--border);border-radius:4px;padding:1px 5px;font-family:var(--mono);font-size:12px;color:var(--accent)}
-@media print{.card,.verdict,table{break-inside:avoid}.echart-box{height:240px!important}}
+code{background:var(--panel2);border-radius:4px;padding:1px 5px;font-family:var(--mono);font-size:12px;color:var(--accent)}
+@media print{.echart-box{height:240px!important}}
+/* 窄屏适配 */
 @media(max-width:640px){
   body{font-size:14px}
-  .container{padding:0 16px 40px}
+  .container{padding:0 20px 40px}
   .header{padding:32px 0 24px}
+  .header .inner{padding:0 20px}
   .header h1{font-size:22px;overflow-wrap:anywhere}
   .header .sub{font-size:13px}
   h2.sec{font-size:19px;margin:34px 0 16px}
@@ -476,6 +1221,22 @@ code{background:var(--panel2);border:1px solid var(--border);border-radius:4px;p
   .meta-chip{font-size:11.5px}
   .kpi .val{font-size:19px}
 }
+/* 浅色主题（变量覆盖，保留 --accent 由场景注入） */
+:root[data-theme="light"]{
+  --bg:#f5f7fb; --panel:#ffffff; --panel2:#eef2f8; --border:#e2e8f2;
+  --text:#1a2233; --text2:#5a6678;
+  --pos:#0f9d6b; --neg:#e11d48; --mid:#b8860b; --mix:#7c3aed;
+}
+@media (prefers-color-scheme: light){
+  :root:not([data-theme="dark"]){
+    --bg:#f5f7fb; --panel:#ffffff; --panel2:#eef2f8; --border:#e2e8f2;
+    --text:#1a2233; --text2:#5a6678;
+    --pos:#0f9d6b; --neg:#e11d48; --mid:#b8860b; --mix:#7c3aed;
+  }
+}
+:root[data-theme="light"] .verdict{background:rgba(59,108,246,.06)}
+:root[data-theme="light"] .verdict.red{background:rgba(225,29,72,.06)}
+:root[data-theme="light"] .brief{background:rgba(59,108,246,.06)}
 """
 
 
@@ -487,10 +1248,10 @@ code{background:var(--panel2);border:1px solid var(--border);border-radius:4px;p
 ECHARTS_BASE = {
     "backgroundColor": "transparent",
     "color": ["#5b8cff", "#34d399", "#fb7185", "#fbbf24", "#a78bfa", "#22d3ee"],
-    "textStyle": {"color": "#8b9bc0"},
+    "textStyle": {"color": "#94a3b8"},
     "tooltip": {"backgroundColor": "#141d33", "borderColor": "#1d2943", "borderWidth": 1,
                 "textStyle": {"color": "#e6ecf7", "fontSize": 12}},
-    "legend": {"textStyle": {"color": "#8b9bc0"}, "itemWidth": 10, "itemHeight": 10},
+    "legend": {"textStyle": {"color": "#94a3b8"}, "itemWidth": 10, "itemHeight": 10},
 }
 
 
@@ -544,6 +1305,29 @@ def _line_option(dates, counts):
 
 def _chart_box(cid, height=280):
     return f'<div class="echart-box" id="{cid}" style="height:{height}px"></div>'
+
+
+def _radar_option(items, title=""):
+    """热度分项雷达图。items: [(name, value 0-100)]"""
+    indicators = [{"name": n, "max": 100} for n, _ in items]
+    values = [v for _, v in items]
+    return {
+        "tooltip": {},
+        "radar": {
+            "indicator": indicators, "radius": "66%", "center": ["50%", "54%"],
+            "axisName": {"color": "#8b9bc0"},
+            "splitLine": {"lineStyle": {"color": "#141d33"}},
+            "splitArea": {"areaStyle": {"color": ["rgba(255,255,255,.02)", "rgba(255,255,255,.04)"]}},
+            "axisLine": {"lineStyle": {"color": "#141d33"}},
+        },
+        "series": [{
+            "type": "radar",
+            "data": [{"value": values, "name": title,
+                      "areaStyle": {"color": "rgba(22,163,74,.25)"},
+                      "lineStyle": {"color": "#16a34a"},
+                      "itemStyle": {"color": "#16a34a"}}],
+        }],
+    }
 
 
 def _charts_script(charts):
@@ -600,8 +1384,10 @@ def _report_header(a):
 </div>"""
 
 
-def _html_head(a, echarts_inline=False):
+def _html_head(a, echarts_inline=False, accent=None):
     echarts_tag = f"<script>{_get_echarts_js()}</script>" if echarts_inline else ""
+    # 主色调随场景：在 REPORT_CSS 之后追加 :root 覆盖，按场景切换品牌色
+    accent_css = f"\n:root{{--accent:{accent}}}" if accent else ""
     return f"""<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
@@ -609,7 +1395,7 @@ def _html_head(a, echarts_inline=False):
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>{esc(a['meta']['topic'])} - 深度调研看板</title>
 <style>
-{REPORT_CSS}
+{REPORT_CSS}{accent_css}
 </style>
 {echarts_tag}
 </head>
@@ -620,17 +1406,9 @@ def _html_head(a, echarts_inline=False):
 
 
 def _report_footer(a):
-    qr_b64 = ""
-    try:
-        qr_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "assets", "qr_base64.txt")
-        qr_b64 = open(qr_path, encoding="utf-8").read().strip()
-    except Exception:
-        pass
-    qr_html = f'<div style="margin:18px 0 8px"><img src="data:image/png;base64,{qr_b64}" alt="公众号二维码" style="max-width:220px;border-radius:10px;background:#fff;padding:8px;border:1px solid var(--border)"/></div><p>扫码关注「莫说闲话」公众号，获取持续舆情追踪与深度报告</p>' if qr_b64 else ""
     return f"""
 <div class="footer">
   <p>由 myou-data-research 数据调研引擎自动生成 · {datetime.now().strftime("%Y-%m-%d %H:%M")}</p>
-  {qr_html}
 </div>"""
 
 
@@ -1113,19 +1891,106 @@ def get_topic_report(topic_id):
     return a, render_report_body(a)
 
 
-def generate_html_report(topic_id: str, output_path: str = None) -> str:
-    """Generate a data-driven deep HTML report (self-contained) from topic data.
+# ============================================================
+# schema-first 简洁渲染器：把 report_schema 填充为 HTML（先样式、后填充）
+# ============================================================
 
-    Every section renders only when the underlying data exists, so the
-    report content adapts to each topic and can be used for briefings.
+def _render_vc_cards(cards):
+    """核心结论速览：纯文字行，无边框盒装饰，用彩色标签区分维度。"""
+    cls_color = {"good": "var(--pos)", "warn": "var(--mid)", "danger": "var(--neg)", "info": "var(--accent)"}
+    html = ""
+    for c in cards:
+        color = cls_color.get(c["cls"], "var(--accent)")
+        html += (f'<p class="vc-line"><span class="vc-lab" style="color:{color}">{esc(c["tag"])}</span>'
+                 f'<b>{esc(c["title"])}</b>：{esc(c["text"])}</p>')
+    return html
+
+
+def _render_signals(signals):
+    """风险信号：纯文字行，用严重度颜色标注，无边框盒。"""
+    html = ""
+    for sig in sorted(signals, key=lambda s: -TYPE_WEIGHTS.get(s.get("severity", "medium"), 3)):
+        sev = sig.get("severity", "medium")
+        color = {"critical": "var(--neg)", "high": "var(--neg)", "medium": "var(--mid)", "low": "var(--pos)"}.get(sev, "var(--mid)")
+        html += (f'<p class="sig-line"><span class="sig-sev" style="color:{color}">【{SEVERITY_LABELS.get(sev, sev)}】</span>'
+                 f'<b>{esc(TYPE_LABELS.get(sig.get("type", ""), sig.get("type", "")))}</b>：{esc(sig.get("description", ""))}'
+                 f'<br><span class="sig-act">建议：{esc(sig.get("recommended_action", ""))}</span></p>')
+    return html
+
+
+def _render_actions(actions):
+    rows = ""
+    for i, (sev, act) in enumerate(actions[:10]):
+        pr = {0: "P0", 1: "P1"}.get(i, "P2")
+        rows += f'<tr><td><b>{pr}</b></td><td>{esc(sev)}</td><td>{esc(act)}</td></tr>'
+    return f'<table class="acts"><tr><th>优先级</th><th>级别</th><th>建议</th></tr>{rows}</table>'
+
+
+def _render_block(block):
+    t = block["type"]
+    if t == "chart":
+        out = _chart_box(block["chart_id"], block.get("height", 260))
+        out += f'<div class="chart-interpret"><span class="lab">解读</span>{esc(block["caption"])}</div>'
+        if block.get("summary"):
+            out += f'<div class="chart-summary"><span class="lab">小结</span>{esc(block["summary"])}</div>'
+        return out
+    if t == "verdict_cards":
+        return _render_vc_cards(block["cards"])
+    if t == "prose":
+        return f'<p class="prose">{esc(block["text"])}</p>'
+    if t == "interpret":
+        return f'<p class="sec-interpret"><span class="lab">解读</span>{esc(block["text"])}</p>'
+    if t == "summary":
+        return f'<p class="sec-summary"><span class="lab">小结</span>{esc(block["text"])}</p>'
+    if t == "text":
+        return f'<p class="prose">{esc(block["text"])}</p>'
+    if t == "signals":
+        return _render_signals(block["signals"])
+    if t == "actions":
+        return _render_actions(block["actions"])
+    return ""
+
+
+def render_report_concise(schema, a):
+    """Stage 3：把 report_schema 填充为 HTML（先样式、后填充）。"""
+    sections = []
+    for i, sec in enumerate(schema["sections"], 1):
+        blocks_html = "".join(_render_block(b) for b in sec["blocks"])
+        sections.append(f"""
+<section>
+<h2 class="sec"><span class="num">{i}</span>{esc(sec['title'])}</h2>
+<p class="sec-lead">{esc(sec['lead'])}</p>
+{blocks_html}
+</section>""")
+    return "\n".join(sections) + _charts_script(schema["charts"])
+
+
+def generate_html_report(topic_id: str, output_path: str = None, mode: str = "concise") -> str:
+    """生成数据驱动的深度 HTML 报告（自包含）。
+
+    mode="concise"（默认）：先由数据生成 report_schema（样式/骨架），再填充渲染，
+        文字限量、每张图带解读、主色调随场景——适合直接交付给目标用户。
+    mode="full"：沿用旧 14(+1) 章全量报告，含完整明细与长文，适合内部深度核对。
     """
     a = analyze_topic(topic_id)
     if not output_path:
         output_path = os.path.join(get_topic_dir(topic_id), "report.html")
 
-    body = render_report_body(a)
+    if mode == "full":
+        body = render_report_body(a)
+        html = _html_head(a, echarts_inline=True) + body + _html_footer(a)
+    else:
+        schema = build_report_schema(a)
+        body = render_report_concise(schema, a)
+        html = _html_head(a, echarts_inline=True, accent=schema["strategy"]["accent"]) + body + _html_footer(a)
 
-    html = _html_head(a, echarts_inline=True) + body + _html_footer(a)
     with open(output_path, "w", encoding="utf-8") as f:
         f.write(html)
     return output_path
+
+
+def get_concise_report(topic_id: str):
+    """生成 schema-first 简洁报告。返回 (schema, html_body)，供网站直接复用。"""
+    a = analyze_topic(topic_id)
+    schema = build_report_schema(a)
+    return schema, render_report_concise(schema, a)
