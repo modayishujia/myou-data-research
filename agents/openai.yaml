@@ -1,7 +1,7 @@
 interface:
   display_name: "MYOU网络情报分析师"
-  short_description: "全天候数据采集与舆情演变追踪"
-  default_prompt: "Use $myou-data-research to 调研「XXX话题」的舆情变化，关注情感演变和关键转折点"
+  short_description: "增量采集社媒与新闻，追踪演变并输出预警与策略"
+  default_prompt: "Use $myou-data-research to 调研「话题」的舆情变化，关注情感演变和关键转折点"
   brand_color: "#1a1a2e"
 
 policy:
