@@ -360,11 +360,14 @@ ul.plain li { margin-bottom: 6px; }
 <div class="toast" id="toast" role="status"></div>
 
 <script>
-/* 生成说明：本文件为信息架构骨架。交付前必须：
-   1) 替换 title/页脚为本话题文案
-   2) 按 dashboard.md「模块选择表」删除本话题无数据的 section
-   3) 全部业务数据写入 data.js，禁止在本文件写死结论
-*/
+/* ============================================================
+   生成骨架说明（读完再写本话题的 index.html）
+   1) 这不是成品页：按 dashboard.md「模块选择表」删除无数据的
+      section（id=sec-*），禁止空壳标题。
+   2) 标题 / 页脚 / 领域注解写成本话题文案；禁止残留 {产品} 等占位符。
+   3) 业务结论一律写 data.js（长文案+数字），本文件不内联调研结论。
+   4) 总是保留：摘要/逻辑/发现/预警/缺口；有数再开：KPI/演变/竞品/催化剂。
+   ============================================================ */
 window.__TOPIC__ = window.__TOPIC__ || {
   meta: { topic_id: "demo", topic: "（等待本话题 data.js）", scenario: "—", status: "idle", rounds: 0, updated_at: "—", frequency: "—", dashboard: false, keywords: [] },
   summary: {

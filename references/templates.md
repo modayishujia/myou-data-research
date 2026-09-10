@@ -8,16 +8,18 @@
 
 ```markdown
 ---
-topic_id: {slug}                    # 小写短横线，如 brand-x-yu7-launch
+topic_id: brand-x-launch              # 见下方「topic_id 规范」；必须与目录名一致
 topic: {话题全名}
 scenario: 舆情监控                   # 金融单品追踪|投资研究|产品发布|行业调研|舆情监控
-status: active                      # active|paused|archived
+status: active                      # active|paused|archived，见「状态机」
 dashboard: false                    # true 时每轮同步 dashboard/data.js
 created_at: 2026-09-08T14:00:00+08:00
 updated_at: 2026-09-10T10:30:00+08:00
 rounds: 3
 source_combo: [小红书, 抖音, 微博, 公众号, 新闻]
 frequency: daily                    # 实时|hourly|daily|weekly|事件触发
+# 金融时点字段（仅金融/投资场景，按轮写入，可缺省）
+# price_change_pct / delivery_latest / confidence: 公告|媒体|社媒
 financial:                          # 仅金融单品/投资场景使用，其余场景可省略
   company: ""
   ticker: ""
@@ -46,6 +48,56 @@ focus: [搜索热度, 内容生态, 评论区情绪, 竞品对比, 风险评估]
 - 基线（第 1 轮）：正面 68% / 负面 9% / n=142
 - 活跃预警：橙 · 负面突增
 - 下轮补采：抖音评论区深采、竞品 A 对比帖
+
+## topic_id 与状态机
+
+### topic_id 规范
+
+| 规则 | 说明 |
+|------|------|
+| 字符 | 小写 `a-z0-9-`，长度 4–40 |
+| 内容 | 优先英文/拼音 slug（`brand-x-launch`）；禁用纯日期、纯随机串 |
+| 冲突 | 目录已存在同名 → 确认后缀 `-2` 或改名；**不得覆盖已有话题** |
+| 稳定 | 创建后不改；与目录名、看板 meta 一致 |
+
+### 状态机
+
+```
+active ⇄ paused
+active → archived
+paused → active | archived
+archived → active（仅用户明确要求）
+```
+
+| 状态 | 采集 | 看板更新 |
+|------|------|----------|
+| active | 按 frequency | 是（若开启） |
+| paused | 否 | 否 |
+| archived | 否（只读） | 否 |
+
+## 报告落盘（可选）
+
+| 文件 | 内容 |
+|------|------|
+| `reports/R{n}-{date}.md` | 该轮标准报告全文 |
+| `reports/crisis-{date}.md` | 危机快报 |
+| `reports/weekly-{date}.md` | 周报 |
+
+research.md **不**重复粘贴整份报告；摘要区保留 3–5 行要点即可。
+
+### 周报模板
+
+```markdown
+# 周报 · {话题} · {起始}~{结束}
+
+## 本周一句话
+## 关键变化（相对上周）
+## 指标快照（带 n=）
+## 活跃预警与处置
+## 竞品/市场要点
+## 下周建议关注
+## 数据缺口
+```
 
 ## 调研方法论
 <!-- 初始化按场景生成，调研人可随时覆写；报告以其为准 -->

@@ -1,6 +1,6 @@
 ---
 name: myou-data-research
-version: "2.2.0"
+version: "2.3.0"
 display_name: MYOU网络情报分析师
 display_name_en: Data Research Methodology
 description_zh: >
@@ -35,14 +35,14 @@ description: >
 
 本文件定义**核心流程与判断规则**。采集细则、报告模板、存储格式见 `references/`，需要时再读，不要预先全量加载。
 
-| 参考文件 | 用途 |
-|----------|------|
-| [references/data_sources.md](references/data_sources.md) | 渠道优先级、动态选源、降级链、平台要点、分层采样 |
-| [references/scenarios.md](references/scenarios.md) | 5 场景链路、关键词矩阵占位、默认频率档 |
-| [references/templates.md](references/templates.md) | research.md 骨架、去重、增量读写、报告与预警模板 |
-| [references/metrics.md](references/metrics.md) | 分层抽样、KMI、情绪/KOL、风险/预测、中文标签 |
-| [references/dashboard.md](references/dashboard.md) | 本地实时看板：触发时机、data.js 契约、每轮更新 |
-| [references/examples.md](references/examples.md) | 行业示例（可替换，非默认字段） |
+| 参考文件 | 用途 | 何时读 |
+|----------|------|--------|
+| [references/data_sources.md](references/data_sources.md) | 渠道优先级、动态选源、降级链、平台要点、采集礼貌 | Phase 2 采集前 |
+| [references/scenarios.md](references/scenarios.md) | 5 场景链路、关键词矩阵占位、默认频率档 | Phase 1 / 改方案时 |
+| [references/templates.md](references/templates.md) | research.md 骨架、topic_id、状态机、去重、报告模板 | 初始化 / 写盘前 |
+| [references/metrics.md](references/metrics.md) | 分层抽样权威标准、KMI、情绪/KOL、信号映射 | Phase 2 采样 / Phase 3 分析 |
+| [references/dashboard.md](references/dashboard.md) | 本地看板：触发、模块表、data.js 富文案契约 | 开启或更新看板时 |
+| [references/examples.md](references/examples.md) | 行业示例（可替换，非默认字段） | 填关键词矩阵时可选 |
 
 ## 核心原则
 
@@ -61,6 +61,40 @@ description: >
 13. **源随话题走**：数据源按话题特征动态匹配，主源失败用备选源补齐
 14. **不臆造数据**：缺口就标注缺口，禁止用旧数据或推断冒充新数据
 15. **边界清晰**：本 skill 只产出结构化 markdown；推送/推送通道由宿主工具负责
+16. **礼貌采集与停机**：遵守平台节奏，单源失败有限重试；主源与备选均不可用则结束本轮并报告缺口，禁止空转凑数
+17. **隐私与合规**：不写入手机号/身份证/住址等个人敏感信息；不对普通用户做人肉拼图或煽动网暴；仅基于公开信息分析
+
+## 话题生命周期
+
+数据根目录：`~/.local/share/data-research/`，每话题一目录。
+
+| 动作 | 何时 | 做什么 |
+|------|------|--------|
+| **新建** | 用户给出新关注点且目录下无相近话题 | 生成 `topic_id` → 建目录与 research.md → 出监测方案 |
+| **复用确认** | 新关注点与已有话题高度相似（同品牌/同产品/同事件） | 先列出候选，询问「续跑已有话题还是新建」；禁止静默双开 |
+| **续跑 resume** | 新会话继续盯已有话题 | 读 front matter + 话题摘要 + 近 2–3 轮演变 → 按 frequency 进入 Phase 2 |
+| **列出 list** | 用户问「在盯什么」或 resume 前 | 扫描根目录，输出 `topic_id · 场景 · 状态 · rounds · updated_at` |
+| **暂停 pause** | 用户要求或观测窗结束 | `status: paused`；停止 loop；不删数据 |
+| **归档 archive** | 话题结束或长期不再更新 | `status: archived`；只读，不自动采集 |
+
+`status` 取值：`active` | `paused` | `archived`。仅 `active` 执行定时采集。
+
+### topic_id 规范
+
+- 小写字母/数字/短横线，长度 4–40
+- 优先英文或拼音 slug（如 `brand-x-launch`、`mifinance-su7`）；避免纯日期
+- 与目录下已有 id 冲突 → 追加短后缀（`-2`），并告知用户
+- 创建后写入 front matter，全程不变
+
+### 恢复话题（新会话必做）
+
+用户说「继续 / resume / 上次那个话题」时：
+
+1. 执行 list，展示候选
+2. 用户确认或通过关键词匹配唯一话题
+3. 只读摘要与近几轮演变（禁止全文吸入历史数据条目）
+4. 汇报一句：当前阶段、最近关键变化、活跃预警、建议下轮重点
+5. 再进入采集
 
 ## 场景预设
 
@@ -94,9 +128,10 @@ description: >
 规则：按话题复杂度给出约 5–15 组关键词，并说明每层用途；冷门话题不硬凑。
 
 初始化时必须：
-1. 生成并展示「监测方案」（见产品化流程），请用户确认或修改
-2. 在目标路径创建 `research.md`（骨架见 [templates.md](references/templates.md)）
-3. 写入该话题的「调研方法论」章节（可被用户覆写，后续以其为准）
+1. **先 list 检查**是否已有相近话题，有则确认复用或明确新建理由
+2. 生成并展示「监测方案」（见产品化流程），请用户确认或修改
+3. 按 `topic_id` 规范创建目录与 `research.md`（骨架见 [templates.md](references/templates.md)）
+4. 写入该话题的「调研方法论」章节（可被用户覆写，后续以其为准）
 
 ### Phase 2 — 数据采集
 
@@ -121,6 +156,13 @@ description: >
 5. **KOL 画像**（按需）：参与话题的头部/中腰部账号定位、态度、合作风险
 
 每条数据写入时标注 `collection_method`。采集后立即追加写入 research.md（格式见 templates.md）。
+
+**失败与停机线**：
+
+- 单平台：同一入口失败最多重试 1 次（间隔由宿主决定）；再失败 → 标注缺口，切备选源
+- 本轮若 **全部计划源均无法取得有效样本** → 立即结束采集，在报告写明「本轮未取得新数据」及原因，**禁止用旧数据或空洞段落凑一轮**
+- 单平台单轮浏览/打开详情页建议不超过约 30 次；超出优先保证已采样本的分析质量
+- 细则见 [data_sources.md](references/data_sources.md)「礼貌采集与停机」
 
 ### Phase 3 — 数据分析（每轮专属）
 
@@ -204,6 +246,13 @@ KMI 公式与阈值、演变节点与信号结构见 [metrics.md](references/met
 | 一页摘要 | 决策者 | 态势 / 关键变化 / 预警 / 建议 | 每轮默认 |
 | 标准报告 | 执行 | 见 [templates.md](references/templates.md) 章节表 | 每轮 |
 | 危机快报 | 危机时 | 事件 / 证据 / 影响 / 处置 / 口径建议 | 红/橙预警 |
+| 周报（可选） | 决策/执行 | 相对上周变化、指标快照、预警与下周关注 | `frequency: weekly` 或用户要求 |
+
+**交付去向**：
+
+- 默认：完整报告在对话中输出
+- 可选落盘：`{topic-id}/reports/R{n}-{date}.md`（标准报告）；危机快报另存 `reports/crisis-{date}.md`。`reports/` 默认不入 git
+- research.md **只沉淀**数据条目/演变/信号/预警/预案，不重复粘贴整份报告正文（可存一页摘要要点）
 
 ### 危机处置闭环
 
@@ -245,6 +294,8 @@ KMI 公式与阈值、演变节点与信号结构见 [metrics.md](references/met
 - [ ] 先盘点后分析，本轮分析逻辑已显式写出
 - [ ] 量化指标均标注样本量；缺口已标注，无臆造
 - [ ] 首轮已建立话题基线；第 2 轮起「本轮变化」与上轮可对比
+- [ ] 主源/备选失败已按停机线处理；无「空轮凑数」
+- [ ] 未写入个人敏感信息（手机号/身份证/住址等）
 - [ ] research.md 已按增量规则追加，历史未被覆盖
 - [ ] 首轮完整报告后已询问是否开启本地看板；若 `dashboard: on`，已按本话题生成/更新看板，解读与预测齐全
 - [ ] 无空模块；标签为中文
