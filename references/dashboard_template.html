@@ -1,0 +1,673 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>情报看板</title>
+<style>
+:root {
+  --ink: #1a1d21;
+  --muted: #5c6570;
+  --paper: #eef1f3;
+  --card: #ffffff;
+  --line: #e0e5ea;
+  --accent: #1f6feb;
+  --crit: #c9372c;
+  --warn: #bf8700;
+  --ok: #1a7f37;
+  --pos: #2da44e;
+  --neg: #cf222e;
+  --neu: #8b949e;
+  --mix: #8250df;
+  --radius: 8px;
+  --shadow: 0 1px 2px rgba(16,24,40,.06);
+  --font: system-ui, -apple-system, "PingFang SC", "Microsoft YaHei", "Segoe UI", sans-serif;
+  --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; }
+body {
+  font-family: var(--font);
+  color: var(--ink);
+  background: var(--paper);
+  font-size: 14px;
+  line-height: 1.6;
+  min-height: 100vh;
+}
+.topbar {
+  background: var(--card);
+  border-bottom: 1px solid var(--line);
+  padding: 12px 20px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 16px;
+  align-items: baseline;
+  position: sticky;
+  top: 0;
+  z-index: 10;
+}
+.topbar h1 { margin: 0; font-size: 16px; font-weight: 650; }
+.topbar .meta {
+  color: var(--muted);
+  font-size: 12px;
+  font-family: var(--mono);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+.badge {
+  display: inline-flex;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  border: 1px solid var(--line);
+  background: var(--paper);
+  color: var(--muted);
+}
+.badge.on { color: var(--ok); border-color: #aceebb; background: #dafbe1; }
+.badge.warn { color: #9a6700; border-color: #ffe1a0; background: #fff8c5; }
+.wrap {
+  max-width: 1120px;
+  margin: 0 auto;
+  padding: 16px 16px 48px;
+  display: grid;
+  gap: 12px;
+}
+.kpis {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 10px;
+}
+.kpi {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 12px 14px;
+  position: relative;
+  overflow: hidden;
+}
+.kpi::before {
+  content: "";
+  position: absolute;
+  left: 0; top: 0; bottom: 0;
+  width: 3px;
+  background: var(--neu);
+}
+.kpi.ok::before { background: var(--ok); }
+.kpi.warn::before { background: var(--warn); }
+.kpi.crit::before { background: var(--crit); }
+.kpi .label { color: var(--muted); font-size: 12px; }
+.kpi .value {
+  font-size: 26px;
+  font-weight: 650;
+  font-family: var(--mono);
+  line-height: 1.15;
+  margin-top: 2px;
+}
+.kpi .value small { font-size: 13px; font-weight: 500; color: var(--muted); }
+.kpi .sub { margin-top: 2px; font-size: 12px; color: var(--muted); font-family: var(--mono); }
+.kpi .note { margin-top: 6px; font-size: 12px; color: var(--ink); line-height: 1.45; }
+.grid {
+  display: grid;
+  grid-template-columns: 1.35fr 1fr;
+  gap: 12px;
+}
+@media (max-width: 860px) { .grid { grid-template-columns: 1fr; } }
+.card {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 14px 16px 16px;
+}
+.card h2 {
+  margin: 0 0 10px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+  letter-spacing: .06em;
+}
+.headline {
+  font-size: 17px;
+  font-weight: 650;
+  line-height: 1.45;
+  margin: 0 0 10px;
+}
+.prose { margin: 0; }
+.prose p { margin: 0 0 8px; }
+.prose p:last-child { margin-bottom: 0; }
+.meta-lines { color: var(--muted); font-size: 12px; font-family: var(--mono); display: grid; gap: 4px; margin-top: 10px; }
+.alert {
+  display: grid;
+  grid-template-columns: 10px 1fr;
+  gap: 10px;
+  padding: 8px 0;
+  border-top: 1px solid var(--line);
+}
+.alert:first-of-type { border-top: 0; padding-top: 0; }
+.dot { width: 10px; height: 10px; border-radius: 50%; margin-top: 5px; background: var(--neu); }
+.dot.red, .dot.严重 { background: var(--crit); }
+.dot.orange, .dot.高风险 { background: #f0883e; }
+.dot.yellow, .dot.中等 { background: var(--warn); }
+.dot.blue, .dot.低 { background: var(--accent); }
+.alert .t { font-size: 13px; font-weight: 600; }
+.alert .body { margin-top: 4px; font-size: 13px; }
+.alert .act {
+  margin-top: 6px;
+  padding: 8px 10px;
+  background: #f6f8fa;
+  border-left: 3px solid var(--accent);
+  border-radius: 0 4px 4px 0;
+  font-size: 13px;
+}
+.alert .d { color: var(--muted); font-size: 12px; font-family: var(--mono); margin-top: 2px; }
+.empty { color: var(--muted); font-size: 13px; padding: 6px 0; }
+.bars { display: grid; gap: 8px; }
+.bar-row {
+  display: grid;
+  grid-template-columns: 88px 1fr 56px;
+  gap: 8px;
+  align-items: center;
+  font-size: 12px;
+}
+.bar-row .lbl { color: var(--muted); font-family: var(--mono); }
+.bar-row .n { text-align: right; color: var(--muted); font-family: var(--mono); }
+.stack {
+  display: flex;
+  height: 14px;
+  border-radius: 3px;
+  overflow: hidden;
+  background: var(--paper);
+  border: 1px solid var(--line);
+}
+.stack span { display: block; height: 100%; }
+.stack .p { background: var(--pos); }
+.stack .g { background: var(--neg); }
+.stack .u { background: var(--neu); }
+.stack .m { background: var(--mix); }
+.legend { display: flex; flex-wrap: wrap; gap: 10px 14px; margin-top: 10px; font-size: 12px; color: var(--muted); }
+.legend i { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 4px; vertical-align: middle; }
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th, td { text-align: left; padding: 7px 4px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { color: var(--muted); font-weight: 500; font-size: 12px; }
+td.n, th.n { font-family: var(--mono); text-align: right; white-space: nowrap; }
+.finding {
+  padding: 10px 0;
+  border-top: 1px solid var(--line);
+}
+.finding:first-child { border-top: 0; padding-top: 0; }
+.finding .title { font-weight: 650; font-size: 14px; }
+.finding .detail { margin-top: 4px; font-size: 13px; }
+.finding .imp {
+  margin-top: 6px;
+  font-size: 13px;
+  background: #f6f8fa;
+  border-left: 3px solid var(--ok);
+  padding: 8px 10px;
+  border-radius: 0 4px 4px 0;
+}
+.finding .n { color: var(--muted); font-family: var(--mono); font-size: 12px; }
+.pred {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 12px;
+  margin-bottom: 10px;
+  background: #fafbfc;
+}
+.pred:last-child { margin-bottom: 0; }
+.pred .title { font-weight: 650; font-size: 14px; }
+.pred .conf {
+  display: inline-block;
+  margin-left: 8px;
+  font-size: 12px;
+  color: var(--muted);
+  font-family: var(--mono);
+}
+.pred .body { margin-top: 6px; font-size: 13px; }
+.pred .kv { margin-top: 8px; font-size: 12px; color: var(--muted); }
+.pred .kv strong { color: var(--ink); font-weight: 600; }
+.platform {
+  padding: 8px 0;
+  border-top: 1px solid var(--line);
+  font-size: 13px;
+}
+.platform:first-child { border-top: 0; padding-top: 0; }
+.platform .name { font-weight: 600; }
+.platform .name span { color: var(--muted); font-weight: 400; font-family: var(--mono); font-size: 12px; margin-left: 6px; }
+.platform .text { margin-top: 3px; }
+ul.plain { margin: 0; padding-left: 18px; }
+ul.plain li { margin-bottom: 6px; }
+.footnote {
+  color: var(--muted);
+  font-size: 12px;
+  text-align: center;
+  padding: 8px 16px 24px;
+}
+.toast {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  background: var(--ink);
+  color: #fff;
+  padding: 8px 12px;
+  border-radius: 6px;
+  font-size: 12px;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity .25s ease;
+}
+.toast.show { opacity: .92; }
+@media (prefers-reduced-motion: reduce) { .toast { transition: none; } }
+.keywords { font-size: 12px; color: var(--muted); font-family: var(--mono); margin-top: 6px; }
+</style>
+</head>
+<body>
+<header class="topbar">
+  <h1 id="title">情报看板</h1>
+  <div class="meta" id="meta"></div>
+</header>
+
+<main class="wrap">
+  <!-- 态势总览 -->
+  <section class="card" id="sec-summary">
+    <h2>态势总览</h2>
+    <p class="headline" id="headline">—</p>
+    <div class="prose" id="summaryBody"></div>
+    <div class="meta-lines" id="summaryMeta"></div>
+    <div class="keywords" id="keywords"></div>
+  </section>
+
+  <section class="card" id="sec-logic">
+    <h2>本轮分析逻辑</h2>
+    <div class="prose" id="logic"></div>
+  </section>
+
+  <section class="kpis" id="kpis" aria-label="关键指标"></section>
+
+  <div class="grid">
+    <section class="card" id="sec-series">
+      <h2>情绪 / 声量演变</h2>
+      <div class="bars" id="series"></div>
+      <div class="legend">
+        <span><i style="background:var(--pos)"></i>正面</span>
+        <span><i style="background:var(--neg)"></i>负面</span>
+        <span><i style="background:var(--neu)"></i>中性</span>
+        <span><i style="background:var(--mix)"></i>混合</span>
+      </div>
+      <div class="prose" id="seriesNote" style="margin-top:10px"></div>
+    </section>
+    <section class="card" id="sec-signals">
+      <h2>信号与建议</h2>
+      <div id="signals"></div>
+    </section>
+  </div>
+
+  <section class="card" id="sec-findings">
+    <h2>核心发现与解读</h2>
+    <div id="findings"></div>
+  </section>
+
+  <section class="card" id="sec-interp">
+    <h2>意味着什么</h2>
+    <div class="prose" id="interpretation"></div>
+  </section>
+
+  <section class="card" id="sec-preds">
+    <h2>预测与触发条件</h2>
+    <div id="predictions"></div>
+  </section>
+
+  <section class="card" id="sec-risks">
+    <h2>风险矩阵</h2>
+    <div id="risks"></div>
+  </section>
+
+  <section class="card" id="sec-comp">
+    <h2>竞品 / 对标</h2>
+    <div id="competitors"></div>
+  </section>
+
+  <div class="grid">
+    <section class="card" id="sec-plat">
+      <h2>平台评论区摘要</h2>
+      <div id="platforms"></div>
+    </section>
+    <section class="card" id="sec-alerts">
+      <h2>预警记录</h2>
+      <div id="alerts"></div>
+    </section>
+  </div>
+
+  <div class="grid">
+    <section class="card" id="sec-gaps">
+      <h2>数据缺口</h2>
+      <div id="gaps"></div>
+    </section>
+    <section class="card" id="sec-next">
+      <h2>下轮补采计划</h2>
+      <div class="prose" id="nextPlan"></div>
+    </section>
+  </div>
+
+  <section class="card" id="sec-cat">
+    <h2>催化剂 / 日历</h2>
+    <div id="catalysts"></div>
+  </section>
+</main>
+
+<p class="footnote" id="foot">数据来自同目录 data.js · research.md 为事实源 · 本页不构成投资建议</p>
+<div class="toast" id="toast" role="status"></div>
+
+<script>
+/* 生成说明：本文件为信息架构骨架。交付前必须：
+   1) 替换 title/页脚为本话题文案
+   2) 按 dashboard.md「模块选择表」删除本话题无数据的 section
+   3) 全部业务数据写入 data.js，禁止在本文件写死结论
+*/
+window.__TOPIC__ = window.__TOPIC__ || {
+  meta: { topic_id: "demo", topic: "（等待本话题 data.js）", scenario: "—", status: "idle", rounds: 0, updated_at: "—", frequency: "—", dashboard: false, keywords: [] },
+  summary: {
+    stage: "未初始化",
+    headline: "尚未写入本话题数据。开启看板后，skill 会按场景与本轮结论动态生成。",
+    body: ["这是生成骨架的回退文案，不是调研结论。"],
+    baseline: "—", active_alerts: [], next_focus: "—"
+  },
+  logic: { why: "—", baseline_rule: "—", sample_note: "—" },
+  kpi: [],
+  sentiment_series: [],
+  series_note: "建立基线后显示演变。",
+  findings: [],
+  interpretation: [],
+  signals: [],
+  predictions: [],
+  risks: [],
+  competitors: [],
+  platform_notes: [],
+  alerts: [],
+  gaps: [{ platform: "全部", reason: "data.js 未生成", impact: "显示骨架占位" }],
+  next_plan: "—",
+  catalysts: [],
+  timeline: []
+};
+</script>
+<script src="data.js"></script>
+<script>
+(function () {
+  var REFRESH_MS = 30000;
+  var $ = function (id) { return document.getElementById(id); };
+
+  function esc(s) {
+    return String(s == null ? "" : s)
+      .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;");
+  }
+  function paras(arr) {
+    if (!arr || !arr.length) return '<div class="empty">—</div>';
+    return '<div class="prose">' + arr.map(function (p) { return "<p>" + esc(p) + "</p>"; }).join("") + "</div>";
+  }
+  function sevClass(sev) {
+    var s = String(sev || "");
+    if (/red|红|严重/i.test(s)) return "red";
+    if (/orange|橙|高/i.test(s)) return "orange";
+    if (/yellow|黄|中/i.test(s)) return "yellow";
+    if (/blue|蓝|低/i.test(s)) return "blue";
+    return "";
+  }
+  function show(id, on) {
+    var el = $(id);
+    if (el) el.style.display = on ? "" : "none";
+  }
+
+  function render(data) {
+    var m = data.meta || {};
+    var s = data.summary || {};
+    document.title = (m.topic || "情报看板") + " · 本地看板";
+    $("title").textContent = m.topic || "本地情报看板";
+
+    var badges = [];
+    badges.push('<span class="badge">' + esc(m.scenario || "—") + "</span>");
+    badges.push('<span class="badge">第 ' + esc(m.rounds || 0) + " 轮</span>");
+    badges.push('<span class="badge">' + esc(m.updated_at || "—") + "</span>");
+    badges.push('<span class="badge">频率 ' + esc(m.frequency || "—") + "</span>");
+    if (m.dashboard) badges.push('<span class="badge on">看板已启用</span>');
+    $("meta").innerHTML = badges.join(" ");
+
+    $("headline").textContent = s.headline || "—";
+    $("summaryBody").innerHTML = (s.body && s.body.length)
+      ? s.body.map(function (p) { return "<p>" + esc(p) + "</p>"; }).join("")
+      : '<div class="empty">暂无态势解读</div>';
+    $("summaryMeta").innerHTML =
+      "<div>阶段：" + esc(s.stage || "—") + "</div>" +
+      "<div>基线：" + esc(s.baseline || "—") + "</div>" +
+      "<div>活跃预警：" + esc((s.active_alerts || []).join("；") || "无") + "</div>" +
+      "<div>下轮焦点：" + esc(s.next_focus || "—") + "</div>";
+    $("keywords").textContent = (m.keywords && m.keywords.length)
+      ? "监控词：" + m.keywords.join(" / ")
+      : "";
+
+    var lg = data.logic || {};
+    $("logic").innerHTML =
+      "<p><strong>为何选这些维度：</strong>" + esc(lg.why || "—") + "</p>" +
+      "<p><strong>基准：</strong>" + esc(lg.baseline_rule || "—") + "</p>" +
+      "<p><strong>样本：</strong>" + esc(lg.sample_note || "—") + "</p>";
+
+    var kpis = data.kpi || [];
+    show("kpis", true);
+    if (!kpis.length) {
+      $("kpis").innerHTML = '<div class="card empty" style="grid-column:1/-1">本轮无足够样本的量化指标，以下文字解读为准。</div>';
+    } else {
+      $("kpis").innerHTML = kpis.map(function (k) {
+        var st = esc(k.status || "");
+        var delta = k.delta ? " · " + esc(k.delta) : "";
+        return (
+          '<article class="kpi ' + st + '">' +
+            '<div class="label">' + esc(k.label) + "</div>" +
+            '<div class="value">' + esc(k.value) + '<small>' + esc(k.unit || "") + "</small></div>" +
+            '<div class="sub">n=' + esc(k.n || 0) + delta + "</div>" +
+            (k.note ? '<div class="note">' + esc(k.note) + "</div>" : "") +
+          "</article>"
+        );
+      }).join("");
+    }
+
+    var series = (data.sentiment_series || []).slice(-12);
+    if (!series.length) {
+      $("series").innerHTML = '<div class="empty">尚无演变序列</div>';
+    } else {
+      $("series").innerHTML = series.map(function (r) {
+        var p = r.positive || 0, g = r.negative || 0, u = r.neutral || 0, mix = r.mixed || 0;
+        return (
+          '<div class="bar-row">' +
+            '<div class="lbl">R' + esc(r.round) + " · " + esc(String(r.date || "").slice(5)) + "</div>" +
+            '<div class="stack" title="正' + p + '% 负' + g + '%">' +
+              '<span class="p" style="width:' + p + '%"></span>' +
+              '<span class="g" style="width:' + g + '%"></span>' +
+              '<span class="u" style="width:' + u + '%"></span>' +
+              '<span class="m" style="width:' + mix + '%"></span>' +
+            "</div>" +
+            '<div class="n">n=' + esc(r.n || 0) + "</div>" +
+          "</div>"
+        );
+      }).join("");
+    }
+    $("seriesNote").innerHTML = data.series_note
+      ? "<p>" + esc(data.series_note) + "</p>"
+      : "";
+
+    var sigs = data.signals || [];
+    $("signals").innerHTML = sigs.length
+      ? sigs.map(function (a) {
+          var c = sevClass(a.severity);
+          return (
+            '<div class="alert">' +
+              '<div class="dot ' + c + '"></div>' +
+              "<div>" +
+                '<div class="t">' + esc(a.severity || "") + " · " + esc(a.type || "") + " · " + esc(a.title || "") + "</div>" +
+                (a.detail ? '<div class="body">' + esc(a.detail) + "</div>" : "") +
+                (a.action ? '<div class="act">建议：' + esc(a.action) + "</div>" : "") +
+              "</div>" +
+            "</div>"
+          );
+        }).join("")
+      : '<div class="empty">本轮无升级信号；继续按 frequency 观察。</div>';
+
+    var fs = data.findings || [];
+    $("findings").innerHTML = fs.length
+      ? fs.map(function (f) {
+          return (
+            '<div class="finding">' +
+              '<div class="title">' + esc(f.title) + "</div>" +
+              '<div class="detail">' + esc(f.detail || "") +
+                (f.n != null ? ' <span class="n">n=' + esc(f.n) + "</span>" : "") +
+              "</div>" +
+              (f.implication ? '<div class="imp">意味着：' + esc(f.implication) + "</div>" : "") +
+            "</div>"
+          );
+        }).join("")
+      : '<div class="empty">本轮暂无独立发现</div>';
+
+    $("interpretation").innerHTML = (data.interpretation && data.interpretation.length)
+      ? data.interpretation.map(function (p) { return "<p>" + esc(p) + "</p>"; }).join("")
+      : '<div class="empty">—</div>';
+
+    var preds = data.predictions || [];
+    $("predictions").innerHTML = preds.length
+      ? preds.map(function (p) {
+          var triggers = (p.triggers || []).map(esc).join("；") || "—";
+          var track = (p.track || []).map(esc).join("、") || "—";
+          return (
+            '<div class="pred">' +
+              '<div class="title">' + esc(p.title) +
+                (p.confidence ? '<span class="conf">置信 ' + esc(p.confidence) + "</span>" : "") +
+              "</div>" +
+              '<div class="body">' + esc(p.body || "") + "</div>" +
+              '<div class="kv"><strong>触发：</strong>' + triggers + "</div>" +
+              '<div class="kv"><strong>跟踪：</strong>' + track + "</div>" +
+            "</div>"
+          );
+        }).join("")
+      : '<div class="empty">第 1 轮可暂缓；第 2 轮起须给出「下一轮最可能的变化」。</div>';
+
+    var risks = data.risks || [];
+    if (!risks.length) {
+      $("risks").innerHTML = '<div class="empty">本轮未输出风险矩阵</div>';
+    } else {
+      $("risks").innerHTML =
+        "<table><thead><tr><th>风险</th><th>概率</th><th>影响</th><th>触发</th><th>预警指标</th><th>响应</th></tr></thead><tbody>" +
+        risks.map(function (r) {
+          return "<tr><td>" + esc(r.name) + "</td><td>" + esc(r.probability) +
+            "</td><td>" + esc(r.impact) + "</td><td>" + esc(r.trigger) +
+            "</td><td>" + esc(r.warning) + "</td><td>" + esc(r.response) + "</td></tr>";
+        }).join("") + "</tbody></table>";
+    }
+
+    var comps = data.competitors || [];
+    if (!comps.length) {
+      $("comp") && ($("comp").innerHTML = "");
+      show("sec-comp", false);
+    } else {
+      show("sec-comp", true);
+      $("competitors").innerHTML =
+        "<table><thead><tr><th>对象</th><th class='n'>提及</th><th>用户倾向</th><th>对比要点</th></tr></thead><tbody>" +
+        comps.map(function (c) {
+          return "<tr><td>" + esc(c.name) + "</td><td class='n'>" + esc(c.mentions || 0) +
+            "</td><td>" + esc(c.user_lean || "—") + "</td><td>" + esc(c.vs_note || "—") + "</td></tr>";
+        }).join("") + "</tbody></table>";
+    }
+
+    var pns = data.platform_notes || [];
+    $("platforms").innerHTML = pns.length
+      ? pns.map(function (p) {
+          return (
+            '<div class="platform">' +
+              '<div class="name">' + esc(p.name) + "<span>n=" + esc(p.n || 0) + "</span></div>" +
+              '<div class="text">' + esc(p.text || "") + "</div>" +
+            "</div>"
+          );
+        }).join("")
+      : '<div class="empty">暂无平台摘要</div>';
+
+    var al = data.alerts || [];
+    $("alerts").innerHTML = al.length
+      ? al.map(function (a) {
+          return (
+            '<div class="alert">' +
+              '<div class="dot ' + sevClass(a.severity) + '"></div>' +
+              "<div>" +
+                '<div class="t">' + esc(a.type || "预警") + " · " + esc(a.indicator || "") + "</div>" +
+                '<div class="d">' + esc(a.time || "") + " · " + esc(a.status || "—") + "</div>" +
+              "</div>" +
+            "</div>"
+          );
+        }).join("")
+      : '<div class="empty">暂无预警记录</div>';
+
+    var gs = data.gaps || [];
+    $("gaps").innerHTML = gs.length
+      ? '<ul class="plain">' + gs.map(function (g) {
+          return "<li><strong>" + esc(g.platform) + "</strong>：" + esc(g.reason || "") +
+            (g.impact ? "（影响：" + esc(g.impact) + "）" : "") + "</li>";
+        }).join("") + "</ul>"
+      : '<div class="empty">本轮覆盖完整</div>';
+
+    $("nextPlan").innerHTML = data.next_plan
+      ? "<p>" + esc(data.next_plan) + "</p>"
+      : '<div class="empty">—</div>';
+
+    var cats = data.catalysts || [];
+    if (!cats.length) {
+      show("sec-cat", false);
+    } else {
+      show("sec-cat", true);
+      $("catalysts").innerHTML =
+        "<table><thead><tr><th>日期</th><th>事件</th><th>备注</th></tr></thead><tbody>" +
+        cats.map(function (c) {
+          return "<tr><td class='n'>" + esc(c.date) + "</td><td>" + esc(c.title) + "</td><td>" + esc(c.note || "—") + "</td></tr>";
+        }).join("") + "</tbody></table>";
+    }
+  }
+
+  function toast(msg) {
+    var el = $("toast");
+    el.textContent = msg;
+    el.classList.add("show");
+    setTimeout(function () { el.classList.remove("show"); }, 2200);
+  }
+
+  function loadDataScript() {
+    return new Promise(function (resolve) {
+      var old = document.querySelector("script[data-topic-data]");
+      if (old) old.parentNode.removeChild(old);
+      var s = document.createElement("script");
+      s.src = "data.js?t=" + Date.now();
+      s.setAttribute("data-topic-data", "1");
+      s.onload = function () { resolve(true); };
+      s.onerror = function () { resolve(false); };
+      document.body.appendChild(s);
+    });
+  }
+
+  function boot() {
+    render(window.__TOPIC__ || {});
+    setInterval(function () {
+      loadDataScript().then(function (ok) {
+        if (ok && window.__TOPIC__) {
+          render(window.__TOPIC__);
+          toast("已载入最新 data.js");
+        } else {
+          toast("刷新失败：请手动刷新（file:// 限制）");
+        }
+      });
+    }, REFRESH_MS);
+  }
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", boot);
+  } else {
+    boot();
+  }
+})();
+</script>
+</body>
+</html>

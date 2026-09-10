@@ -1,5 +1,24 @@
 # Changelog
 
+## 2.2.0 — 2026-09-10
+
+### 看板动态化与富文本
+
+- 看板改为**按调研任务动态生成**：模块随场景与本轮数据组装，禁止套用固定成品页
+- data.js 扩展长文案：态势 body、分析逻辑、发现 implication、意味着什么、信号 action、预测（结论/触发/跟踪/置信）、平台文字摘要、下轮计划
+- 骨架 `dashboard_template.html` 仅作生成参考；交付为话题专属 `index.html`
+- 生成原则：文字解读优先，数字必须带一句「意味着什么」
+
+## 2.1.0 — 2026-09-10
+
+### 本地实时看板
+
+- 首轮完整报告后**必须询问**是否开启本地看板；监测方案增加 `dashboard` 字段
+- 生成 `dashboard/index.html` + `data.js`（自包含、无 CDN，`file://` 可开）
+- 每轮写完 research.md 后按契约重写 data.js；看板不替代报告，也不是采集触发器
+- 新增 `references/dashboard.md`（协议）与 `references/dashboard_template.html`（视图模板）
+- front matter 增加 `dashboard: true|false`
+
 ## 2.0.0 — 2026-09-10
 
 ### 结构

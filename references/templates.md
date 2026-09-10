@@ -12,6 +12,7 @@ topic_id: {slug}                    # 小写短横线，如 brand-x-yu7-launch
 topic: {话题全名}
 scenario: 舆情监控                   # 金融单品追踪|投资研究|产品发布|行业调研|舆情监控
 status: active                      # active|paused|archived
+dashboard: false                    # true 时每轮同步 dashboard/data.js
 created_at: 2026-09-08T14:00:00+08:00
 updated_at: 2026-09-10T10:30:00+08:00
 rounds: 3
@@ -140,7 +141,7 @@ focus: [搜索热度, 内容生态, 评论区情绪, 竞品对比, 风险评估]
 | 动作 | 策略 |
 |------|------|
 | 每轮开始读什么 | front matter +「话题摘要」（含活跃预警行）+「演变」最近 2–3 个节点；需要对比原始证据时再定点读数据条目，禁止全文吸入 |
-| 每轮写什么 | 追加本轮数据条目、演变节点、信号；刷新 front matter `updated_at/rounds`；重写「话题摘要」 |
+| 每轮写什么 | 追加本轮数据条目、演变节点、信号；刷新 front matter `updated_at/rounds`；重写「话题摘要」；若 `dashboard: true` 同步 `dashboard/data.js` |
 | 摘要长度 | 话题摘要 ≤ 15 行；单轮演变 summary ≤ 5 句 |
 | 归档 | research.md > 约 200KB 或 rounds > 40 时：将早期数据条目剪切到同目录 `archive/R{n}-{date}.md`，正文保留指针与演变节点 |
 | 单轮上下文预算 | 采集原文 + 分析输出合计控制在宿主单轮可读范围；超额时先出「一页摘要 + 盘点 + 缺口」，细节下轮补 |

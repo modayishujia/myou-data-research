@@ -1,6 +1,6 @@
 ---
 name: myou-data-research
-version: "2.0.0"
+version: "2.2.0"
 display_name: MYOU网络情报分析师
 display_name_en: Data Research Methodology
 description_zh: >
@@ -8,6 +8,7 @@ description_zh: >
   采集公众号/小红书/微博/新闻/抖音/X/Reddit 提及与评论区，产出调研、预警与策略分析。
   数据源随话题动态匹配；每轮先盘点实采数据再生成分析逻辑，不套固定维度。
   支持 5 种场景：舆情监控、产品发布、行业调研、投资研究、金融单品追踪。
+  调研完成后可切换本地实时看板（HTML，每轮自动更新）。
   无脚本、无服务端，由模型直接执行采集与分析，输出 markdown。
 description_en: >
   A pure-methodology skill for web intelligence research. Given a focus topic (brand / product /
@@ -16,13 +17,15 @@ description_en: >
   research, alerts, and strategy reports. Data sources are matched dynamically per topic; each
   round inventories actual samples first, then derives analysis logic instead of forcing a fixed
   dimension set. Five scenario presets: public opinion monitoring, product launch, industry
-  research, investment research, single-product financial tracking. No scripts or server — the
-  model executes collection and analysis directly and outputs markdown.
+  research, investment research, single-product financial tracking. After research, switch to an
+  optional local live dashboard (self-contained HTML, refreshed each round). No scripts or
+  server — the model executes collection and analysis directly and outputs markdown.
 description: >
   纯方法论的全网情报调研 skill：用户给出关注点（品牌/产品/舆情/竞品/事件），自动建立监测方案，
   采集公众号/小红书/微博/新闻/抖音/X/Reddit 提及与评论区，产出调研、预警与策略分析。
   数据源随话题动态匹配；每轮先盘点实采数据再生成分析逻辑，不套固定维度。
   支持 5 种场景：舆情监控、产品发布、行业调研、投资研究、金融单品追踪。
+  调研完成后可切换本地实时看板（HTML，每轮自动更新）。
   无脚本、无服务端，由模型直接执行采集与分析，输出 markdown。
 ---
 
@@ -38,6 +41,7 @@ description: >
 | [references/scenarios.md](references/scenarios.md) | 5 场景链路、关键词矩阵占位、默认频率档 |
 | [references/templates.md](references/templates.md) | research.md 骨架、去重、增量读写、报告与预警模板 |
 | [references/metrics.md](references/metrics.md) | 分层抽样、KMI、情绪/KOL、风险/预测、中文标签 |
+| [references/dashboard.md](references/dashboard.md) | 本地实时看板：触发时机、data.js 契约、每轮更新 |
 | [references/examples.md](references/examples.md) | 行业示例（可替换，非默认字段） |
 
 ## 核心原则
@@ -173,6 +177,7 @@ KMI 公式与阈值、演变节点与信号结构见 [metrics.md](references/met
 - 采集频率 frequency
 - 预警规则（类型 + 阈值 + 级别 + SLA）
 - 报告模板（一页摘要 / 标准 / 周报）
+- 本地看板 dashboard（on/off，默认 off；首轮报告后会再询问一次）
 ```
 
 ### 预警输出
@@ -208,10 +213,24 @@ KMI 公式与阈值、演变节点与信号结构见 [metrics.md](references/met
 
 本品 vs 竞品声量份额（SoV）、情感与 KOL 指标横向对比。无竞品数据时标注「仅内部基准」。
 
+### 本地实时看板
+
+- **首轮完整报告输出后必须询问一次**是否开启本地看板；监测方案里也可预选 `dashboard: on`
+- 开启后在 `{topic-id}/dashboard/` **按本话题动态生成** `index.html` + `data.js`（场景模块、监控词、竞品名、解读与预测全部贴合本任务；禁止套用固定成品页）
+- 每轮：写完 research.md → 重写 data.js（含长文案）→ 模块有变则重新生成 index.html
+- 看板必须以**文字解读 + 预测（结论/触发/跟踪）**为主，数字为辅；不替代标准报告，也不是采集触发器
+- 契约与模块表见 [references/dashboard.md](references/dashboard.md)；`dashboard_template.html` 仅作生成骨架参考
+
 ## 数据存储
 
 ```
 ~/.local/share/data-research/{topic-id}/research.md
+```
+
+开启看板时另有：
+
+```
+~/.local/share/data-research/{topic-id}/dashboard/{index.html,data.js}
 ```
 
 唯一存储文件。front matter + 调研方法论 + 数据说明 + 数据条目 + 演变 + 信号 + 预警记录 + 预案库。
@@ -227,4 +246,5 @@ KMI 公式与阈值、演变节点与信号结构见 [metrics.md](references/met
 - [ ] 量化指标均标注样本量；缺口已标注，无臆造
 - [ ] 首轮已建立话题基线；第 2 轮起「本轮变化」与上轮可对比
 - [ ] research.md 已按增量规则追加，历史未被覆盖
+- [ ] 首轮完整报告后已询问是否开启本地看板；若 `dashboard: on`，已按本话题生成/更新看板，解读与预测齐全
 - [ ] 无空模块；标签为中文

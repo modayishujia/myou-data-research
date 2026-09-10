@@ -45,6 +45,7 @@
 | 每轮专属分析 | 盘点 → 分析逻辑 → 执行；样本量透明 |
 | 分级预警 | 红/橙/黄/蓝结构化输出；**skill 不负责推送**（Webhook/IM 由宿主处理） |
 | 报告三层 | 一页摘要 / 标准报告 / 危机快报，含「vs 上轮」变化 |
+| 本地实时看板 | 首轮报告后询问是否开启；按本话题动态生成 HTML（解读+预测），每轮更新 data.js |
 | 危机闭环 | 预警 → 快报 → 预案库 → 72h 复盘 |
 | 竞品对标 | SoV 与指标横向对比；无数据不编造 |
 | 持续循环 | 频率由监测方案与场景默认档驱动 |
@@ -76,6 +77,8 @@ myou-data-research/
 │   ├── metrics.md               # 分层抽样、KMI、情绪/KOL、标签映射
 │   ├── data_sources.md          # 渠道、动态选源、降级链、平台要点
 │   ├── scenarios.md             # 5 场景链路与频率档
+│   ├── dashboard.md             # 动态看板协议：模块表、data.js 富文案契约
+│   ├── dashboard_template.html  # 生成骨架（非固定成品）
 │   └── examples.md              # 行业示例（可替换，非默认字段）
 └── qrcode.png                   # 公众号二维码（营销用，与执行无关）
 ```
@@ -84,6 +87,8 @@ myou-data-research/
 
 `~/.local/share/data-research/{topic_id}/research.md`：front matter + 话题摘要 + 方法论 + 数据条目 + 演变 + 信号 + 预警记录 + 预案库。  
 每轮只追加数据区；读历史优先摘要与最近演变节点。文件过大时切片到 `archive/`。完整规范见 `references/templates.md`。
+
+开启本地看板后，同话题目录下生成 `dashboard/index.html` + `data.js`（按场景与本轮结论动态组装，含文字解读与预测）。浏览器直接打开；每轮采集完成后 skill 会重写 data.js。
 
 ---
 
